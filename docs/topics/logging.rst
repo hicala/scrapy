@@ -4,14 +4,9 @@
 Logging
 =======
 
-.. note::
-    :mod:`scrapy.log` has been deprecated alongside its functions in favor of
-    explicit calls to the Python standard logging. Keep reading to learn more
-    about the new logging system.
-
-Scrapy uses :mod:`logging` for event logging. We'll
-provide some simple examples to get you started, but for more advanced
-use-cases it's strongly suggested to read thoroughly its documentation.
+Scrapy uses :mod:`logging` for event logging. We'll provide some simple
+examples to get you started, but for more advanced use-cases it's strongly
+suggested to read its documentation thoroughly.
 
 Logging works out of the box, and can be configured to some extent with the
 Scrapy settings listed in :ref:`topics-logging-settings`.
@@ -26,8 +21,8 @@ Scrapy from scripts as described in :ref:`run-from-script`.
 Log levels
 ==========
 
-Python's builtin logging defines 5 different levels to indicate the severity of a
-given log message. Here are the standard ones, listed in decreasing order:
+Python's built-in logging defines 5 different levels to indicate the severity
+of a given log message. Here are the standard ones, listed in decreasing order:
 
 1. ``logging.CRITICAL`` - for critical errors (highest severity)
 2. ``logging.ERROR`` - for regular errors
@@ -39,16 +34,22 @@ How to log messages
 ===================
 
 Here's a quick example of how to log a message using the ``logging.WARNING``
-level::
+level:
+
+.. code-block:: python
 
     import logging
+
     logging.warning("This is a warning")
 
 There are shortcuts for issuing log messages on any of the standard 5 levels,
 and there's also a general ``logging.log`` method which takes a given level as
-argument.  If needed, the last example could be rewritten as::
+argument.  If needed, the last example could be rewritten as:
+
+.. code-block:: python
 
     import logging
+
     logging.log(logging.WARNING, "This is a warning")
 
 On top of that, you can create different "loggers" to encapsulate messages. (For
@@ -56,27 +57,36 @@ example, a common practice is to create different loggers for every module).
 These loggers can be configured independently, and they allow hierarchical
 constructions.
 
-The previous examples use the root logger behind the scenes, which is a top level
-logger where all messages are propagated to (unless otherwise specified). Using
-``logging`` helpers is merely a shortcut for getting the root logger
-explicitly, so this is also an equivalent of the last snippets::
+The previous examples use the root logger behind the scenes, which is a
+top-level logger where all messages are propagated to (unless otherwise
+specified). Using ``logging`` helpers is merely a shortcut for getting the root
+logger explicitly, so this is also an equivalent of the last snippets:
+
+.. code-block:: python
 
     import logging
+
     logger = logging.getLogger()
     logger.warning("This is a warning")
 
 You can use a different logger just by getting its name with the
-``logging.getLogger`` function::
+``logging.getLogger`` function:
+
+.. code-block:: python
 
     import logging
-    logger = logging.getLogger('mycustomlogger')
+
+    logger = logging.getLogger("mycustomlogger")
     logger.warning("This is a warning")
 
 Finally, you can ensure having a custom logger for any module you're working on
-by using the ``__name__`` variable, which is populated with current module's
-path::
+by using the ``__name__`` variable, which is populated with the current
+module's path:
+
+.. code-block:: python
 
     import logging
+
     logger = logging.getLogger(__name__)
     logger.warning("This is a warning")
 
@@ -93,34 +103,48 @@ path::
 Logging from Spiders
 ====================
 
-Scrapy provides a :data:`~scrapy.spiders.Spider.logger` within each Spider
-instance, which can be accessed and used like this::
+Scrapy provides a :data:`~scrapy.Spider.logger` within each Spider
+instance, which can be accessed and used like this:
+
+.. code-block:: python
 
     import scrapy
 
-    class MySpider(scrapy.Spider):
 
-        name = 'myspider'
-        start_urls = ['https://scrapinghub.com']
+    class MySpider(scrapy.Spider):
+        name = "myspider"
+        start_urls = ["https://scrapy.org"]
 
         def parse(self, response):
-            self.logger.info('Parse function called on %s', response.url)
+            self.logger.info("Parse function called on %s", response.url)
 
-That logger is created using the Spider's name, but you can use any custom
-Python logger you want. For example::
+That logger is created using the Spider's name, and every message logged
+through it, as well as most messages logged by Scrapy itself while crawling,
+carries a reference to the spider that triggered it. This is useful to tell
+spiders apart when :ref:`running several of them in the same process
+<run-multiple-spiders>`: add ``%(spider)s`` to :setting:`LOG_FORMAT` to
+include the spider name in every log message, e.g.:
+
+.. code-block:: python
+
+    LOG_FORMAT = "%(asctime)s [%(name)s] %(spider)s %(levelname)s: %(message)s"
+
+You can use any custom Python logger you want too. For example:
+
+.. code-block:: python
 
     import logging
     import scrapy
 
-    logger = logging.getLogger('mycustomlogger')
+    logger = logging.getLogger("mycustomlogger")
+
 
     class MySpider(scrapy.Spider):
-
-        name = 'myspider'
-        start_urls = ['https://scrapinghub.com']
+        name = "myspider"
+        start_urls = ["https://scrapy.org"]
 
         def parse(self, response):
-            logger.info('Parse function called on %s', response.url)
+            logger.info("Parse function called on %s", response.url)
 
 .. _topics-logging-configuration:
 
@@ -140,37 +164,91 @@ the settings below.
 Logging settings
 ----------------
 
-These settings can be used to configure the logging:
-
-* :setting:`LOG_FILE`
-* :setting:`LOG_ENABLED`
-* :setting:`LOG_ENCODING`
-* :setting:`LOG_LEVEL`
-* :setting:`LOG_FORMAT`
-* :setting:`LOG_DATEFORMAT`
-* :setting:`LOG_STDOUT`
-* :setting:`LOG_SHORT_NAMES`
-
-The first couple of settings define a destination for log messages. If
-:setting:`LOG_FILE` is set, messages sent through the root logger will be
+If :setting:`LOG_FILE` is set, messages sent through the root logger will be
 redirected to a file named :setting:`LOG_FILE` with encoding
 :setting:`LOG_ENCODING`. If unset and :setting:`LOG_ENABLED` is ``True``, log
-messages will be displayed on the standard error. Lastly, if
+messages will be displayed on the standard error. If :setting:`LOG_FILE` is set
+and :setting:`LOG_FILE_APPEND` is ``False``, the file will be overwritten
+(discarding the output from previous runs, if any). Lastly, if
 :setting:`LOG_ENABLED` is ``False``, there won't be any visible log output.
+
+Set :setting:`LOG_INSTALL_ROOT_HANDLER` to ``False`` to prevent Scrapy from
+installing a root logging handler altogether, e.g. to configure the root
+logger yourself.
 
 :setting:`LOG_LEVEL` determines the minimum level of severity to display, those
 messages with lower severity will be filtered out. It ranges through the
 possible levels listed in :ref:`topics-logging-levels`.
 
-:setting:`LOG_FORMAT` and :setting:`LOG_DATEFORMAT` specify formatting strings
-used as layouts for all messages. Those strings can contain any placeholders
-listed in :ref:`logging's logrecord attributes docs <logrecord-attributes>` and
-:ref:`datetime's strftime and strptime directives <strftime-strptime-behavior>`
-respectively.
-
 If :setting:`LOG_SHORT_NAMES` is set, then the logs will not display the Scrapy
 component that prints the log. It is unset by default, hence logs contain the
 Scrapy component responsible for that log output.
+
+When logging to a terminal, :setting:`LOG_COLOR` colorizes messages by log
+level.
+
+With the default :setting:`LOG_ROOT_FORMATTER`, :setting:`LOG_FORMAT` and
+:setting:`LOG_DATEFORMAT` specify formatting strings used as layouts for all
+messages. Those strings can contain any placeholders listed in :ref:`logging's
+logrecord attributes docs <logrecord-attributes>` and :ref:`datetime's strftime
+and strptime directives <strftime-strptime-behavior>` respectively.
+
+LOG_ROOT_FORMATTER
+~~~~~~~~~~~~~~~~~~
+
+.. versionadded:: 2.20.0
+
+.. setting:: LOG_ROOT_FORMATTER
+
+Default: :class:`~scrapy.LogRootFormatter`
+
+:ref:`Formatter <formatter-objects>` of the root log handler that
+:func:`~scrapy.utils.log.configure_logging` installs. It implements
+:class:`~scrapy.LogRootFormatterProtocol`.
+
+.. note:: This is a :ref:`logging setting <logging-settings>`.
+
+Rotating log files
+------------------
+
+Scrapy's :setting:`LOG_FILE` setting writes logs to a single file. It does not
+rotate log files automatically, but you can use Python's standard
+:mod:`logging.handlers` module when running Scrapy from a script.
+
+For example, to rotate the log file every day:
+
+.. skip: next
+
+.. code-block:: python
+
+    import logging
+    from logging.handlers import TimedRotatingFileHandler
+
+    from scrapy import LogRootFormatter
+    from scrapy.crawler import CrawlerProcess
+    from scrapy.utils.project import get_project_settings
+
+    from myproject.spiders.myspider import MySpider
+
+    settings = get_project_settings()
+    settings.set("LOG_INSTALL_ROOT_HANDLER", False)
+    process = CrawlerProcess(settings)
+
+    handler = TimedRotatingFileHandler(
+        "scrapy.log",
+        when="midnight",
+        backupCount=7,
+        encoding=settings.get("LOG_ENCODING"),
+    )
+    handler.setFormatter(LogRootFormatter(settings))
+
+    root_logger = logging.getLogger()
+    root_logger.setLevel(settings.get("LOG_LEVEL"))
+    root_logger.addHandler(handler)
+
+    process.crawl(MySpider)
+    process.start()
+
 
 Command-line options
 --------------------
@@ -199,10 +277,6 @@ A custom log format can be set for different actions by extending
 :class:`~scrapy.logformatter.LogFormatter` class and making
 :setting:`LOG_FORMATTER` point to your new class.
 
-.. autoclass:: scrapy.logformatter.LogFormatter
-   :members:
-
-
 .. _topics-logging-advanced-customization:
 
 Advanced customization
@@ -215,7 +289,7 @@ For example, let's say you're scraping a website which returns many
 HTTP 404 and 500 responses, and you want to hide all messages like this::
 
     2016-12-16 22:00:06 [scrapy.spidermiddlewares.httperror] INFO: Ignoring
-    response <500 http://quotes.toscrape.com/page/1-34/>: HTTP status code
+    response <500 https://quotes.toscrape.com/page/1-34/>: HTTP status code
     is not handled or not allowed
 
 The first thing to note is a logger name - it is in brackets:
@@ -226,7 +300,9 @@ the crawl.
 Next, we can see that the message has INFO level. To hide it
 we should set logging level for ``scrapy.spidermiddlewares.httperror``
 higher than INFO; next level after INFO is WARNING. It could be done
-e.g. in the spider's ``__init__`` method::
+e.g. in the spider's ``__init__`` method:
+
+.. code-block:: python
 
     import logging
     import scrapy
@@ -235,20 +311,67 @@ e.g. in the spider's ``__init__`` method::
     class MySpider(scrapy.Spider):
         # ...
         def __init__(self, *args, **kwargs):
-            logger = logging.getLogger('scrapy.spidermiddlewares.httperror')
+            logger = logging.getLogger("scrapy.spidermiddlewares.httperror")
             logger.setLevel(logging.WARNING)
             super().__init__(*args, **kwargs)
 
 If you run this spider again then INFO messages from
 ``scrapy.spidermiddlewares.httperror`` logger will be gone.
 
+You can also filter log records by :class:`~logging.LogRecord` data. For
+example, you can filter log records by message content using a substring or
+a regular expression. Create a :class:`logging.Filter` subclass
+and equip it with a regular expression pattern to
+filter out unwanted messages:
+
+.. code-block:: python
+
+    import logging
+    import re
+
+
+    class ContentFilter(logging.Filter):
+        def filter(self, record):
+            match = re.search(r"\d{3} [Ee]rror, retrying", record.message)
+            if match:
+                return False
+
+A project-level filter may be attached to the root handler created by Scrapy.
+This is a useful way to filter all loggers in different parts of the project
+(middlewares, spider, etc.):
+
+.. code-block:: python
+
+ import logging
+ import scrapy
+
+
+ class MySpider(scrapy.Spider):
+     # ...
+     def __init__(self, *args, **kwargs):
+         for handler in logging.root.handlers:
+             handler.addFilter(ContentFilter())
+
+Alternatively, you may choose a specific logger
+and hide it without affecting other loggers:
+
+.. code-block:: python
+
+    import logging
+    import scrapy
+
+
+    class MySpider(scrapy.Spider):
+        # ...
+        def __init__(self, *args, **kwargs):
+            logger = logging.getLogger("my_logger")
+            logger.addFilter(ContentFilter())
+
+
 scrapy.utils.log module
 =======================
 
-.. module:: scrapy.utils.log
-   :synopsis: Logging utils
-
-.. autofunction:: configure_logging
+.. autofunction:: scrapy.utils.log.configure_logging
 
     ``configure_logging`` is automatically called when using Scrapy commands
     or :class:`~scrapy.crawler.CrawlerProcess`, but needs to be called explicitly
@@ -262,15 +385,26 @@ scrapy.utils.log module
     so it is recommended to only use :func:`logging.basicConfig` together with
     :class:`~scrapy.crawler.CrawlerRunner`.
 
-    This is an example on how to redirect ``INFO`` or higher messages to a file::
+    This is an example on how to redirect ``INFO`` or higher messages to a file:
+
+    .. code-block:: python
 
         import logging
 
         logging.basicConfig(
-            filename='log.txt',
-            format='%(levelname)s: %(message)s',
-            level=logging.INFO
+            filename="log.txt", format="%(levelname)s: %(message)s", level=logging.INFO
         )
 
     Refer to :ref:`run-from-script` for more details about using Scrapy this
     way.
+
+API reference
+=============
+
+.. autoclass:: scrapy.LogRootFormatterProtocol
+    :members: __init__
+
+.. autoclass:: scrapy.LogRootFormatter
+
+.. autoclass:: scrapy.logformatter.LogFormatter
+    :members:

@@ -1,19 +1,28 @@
 """
 Extension for collecting core stats like items scraped and start/finish times
 """
-from datetime import datetime
 
-from scrapy import signals
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from time import monotonic
+from typing import TYPE_CHECKING, Any, Self
+
+from scrapy import Spider, signals
+
+if TYPE_CHECKING:
+    from scrapy.crawler import Crawler
+    from scrapy.statscollectors import StatsCollector
 
 
 class CoreStats:
-
-    def __init__(self, stats):
-        self.stats = stats
-        self.start_time = None
+    def __init__(self, stats: StatsCollector):
+        self.stats: StatsCollector = stats
+        self.start_time: datetime | None = None
+        self._start_time_mono: float | None = None
 
     @classmethod
-    def from_crawler(cls, crawler):
+    def from_crawler(cls, crawler: Crawler) -> Self:
         o = cls(crawler.stats)
         crawler.signals.connect(o.spider_opened, signal=signals.spider_opened)
         crawler.signals.connect(o.spider_closed, signal=signals.spider_closed)
@@ -22,25 +31,28 @@ class CoreStats:
         crawler.signals.connect(o.response_received, signal=signals.response_received)
         return o
 
-    def spider_opened(self, spider):
-        self.start_time = datetime.utcnow()
-        self.stats.set_value('start_time', self.start_time, spider=spider)
+    def spider_opened(self, spider: Spider) -> None:
+        self.start_time = datetime.now(tz=UTC)
+        self._start_time_mono = monotonic()
+        self.stats.set_value("start_time", self.start_time)
 
-    def spider_closed(self, spider, reason):
-        finish_time = datetime.utcnow()
-        elapsed_time = finish_time - self.start_time
-        elapsed_time_seconds = elapsed_time.total_seconds()
-        self.stats.set_value('elapsed_time_seconds', elapsed_time_seconds, spider=spider)
-        self.stats.set_value('finish_time', finish_time, spider=spider)
-        self.stats.set_value('finish_reason', reason, spider=spider)
+    def spider_closed(self, spider: Spider, reason: str, error: bool = False) -> None:
+        assert self.start_time is not None
+        assert self._start_time_mono is not None
+        finish_time, finish_time_mono = datetime.now(tz=UTC), monotonic()
+        elapsed_time_seconds = finish_time_mono - self._start_time_mono
+        self.stats.set_value("elapsed_time_seconds", elapsed_time_seconds)
+        self.stats.set_value("finish_time", finish_time)
+        self.stats.set_value("finish_reason", reason)
+        self.stats.set_value("finish_reason_error", error)
 
-    def item_scraped(self, item, spider):
-        self.stats.inc_value('item_scraped_count', spider=spider)
+    def item_scraped(self, item: Any, spider: Spider) -> None:
+        self.stats.inc_value("item_scraped_count")
 
-    def response_received(self, spider):
-        self.stats.inc_value('response_received_count', spider=spider)
+    def response_received(self, spider: Spider) -> None:
+        self.stats.inc_value("response_received_count")
 
-    def item_dropped(self, item, spider, exception):
+    def item_dropped(self, item: Any, spider: Spider, exception: BaseException) -> None:
         reason = exception.__class__.__name__
-        self.stats.inc_value('item_dropped_count', spider=spider)
-        self.stats.inc_value(f'item_dropped_reasons_count/{reason}', spider=spider)
+        self.stats.inc_value("item_dropped_count")
+        self.stats.inc_value(f"item_dropped_reasons_count/{reason}")

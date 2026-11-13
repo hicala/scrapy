@@ -2,81 +2,167 @@
 This module provides some useful functions for working with
 scrapy.http.Response objects
 """
+
+from __future__ import annotations
+
+import mimetypes
 import os
-import weakref
-import webbrowser
+import re
 import tempfile
+import warnings
+import webbrowser
+from http.client import responses
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
-from twisted.web import http
-from scrapy.utils.python import to_bytes, to_unicode
-from w3lib import html
+import frostwork
 
+from scrapy.exceptions import ScrapyDeprecationWarning
+from scrapy.http.headers import Headers
+from scrapy.http.response.body_file import BodyFileResponse
+from scrapy.http.response.text import MetaRefresh
+from scrapy.utils.misc import load_object
 
-_baseurl_cache = weakref.WeakKeyDictionary()
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable
 
-
-def get_base_url(response):
-    """Return the base url of the given response, joined with the response url"""
-    if response not in _baseurl_cache:
-        text = response.text[0:4096]
-        _baseurl_cache[response] = html.get_base_url(text, response.url, response.encoding)
-    return _baseurl_cache[response]
-
-
-_metaref_cache = weakref.WeakKeyDictionary()
-
-
-def get_meta_refresh(response, ignore_tags=('script', 'noscript')):
-    """Parse the http-equiv refrsh parameter from the given response"""
-    if response not in _metaref_cache:
-        text = response.text[0:4096]
-        _metaref_cache[response] = html.get_meta_refresh(
-            text, response.url, response.encoding, ignore_tags=ignore_tags)
-    return _metaref_cache[response]
+    from scrapy.http import Response, TextResponse
 
 
-def response_status_message(status):
-    """Return status code plus status text descriptive message
+def _body_size(response: Response) -> int:
+    if isinstance(response, BodyFileResponse):
+        return Path(response.body_file).stat().st_size
+    return len(response.body)
+
+
+def get_base_url(response: TextResponse) -> str:
+    warnings.warn(
+        "scrapy.utils.response.get_base_url() is deprecated, use "
+        "TextResponse.base_url instead.",
+        ScrapyDeprecationWarning,
+        stacklevel=2,
+    )
+    return response.base_url
+
+
+_IGNORABLE_TAGS = {"script", "noscript", "template"}
+
+
+def _get_meta_refresh(response: TextResponse, *, scripting: bool) -> MetaRefresh | None:
+    if scripting:
+        return response.meta_refresh
+    meta_refresh = frostwork.navigation(
+        response.body,
+        response.url,
+        response.encoding,
+        base_url=False,
+        scripting=False,
+    ).meta_refresh
+    return None if meta_refresh is None else MetaRefresh(*meta_refresh)
+
+
+def get_meta_refresh(
+    response: TextResponse,
+    ignore_tags: Iterable[str] = ("script", "noscript"),
+) -> tuple[None, None] | tuple[float, str]:
+    warnings.warn(
+        "scrapy.utils.response.get_meta_refresh() is deprecated, use "
+        "TextResponse.meta_refresh instead.",
+        ScrapyDeprecationWarning,
+        stacklevel=2,
+    )
+    ignore_tags = set(ignore_tags)
+    if not ignore_tags <= _IGNORABLE_TAGS:
+        raise ValueError(
+            f"Unsupported ignore_tags: {sorted(ignore_tags - _IGNORABLE_TAGS)}"
+        )
+    meta_refresh = _get_meta_refresh(response, scripting="noscript" in ignore_tags)
+    if meta_refresh is None:
+        return None, None
+    return meta_refresh.delay, meta_refresh.url
+
+
+def response_from_dict(d: dict[str, Any]) -> Response:
+    """Return a response built from the *d* dict, as returned by
+    :meth:`Response.to_dict() <scrapy.http.Response.to_dict>`.
+
+    .. versionadded:: 2.19.0
+
+    If *d* does not indicate a response class, e.g. because it comes from a
+    plain :class:`~scrapy.http.Response` object or predates :meth:`~scrapy.http.Response.to_dict`,
+    the class is guessed with :attr:`~scrapy.responsetypes.responsetypes`.
     """
-    message = http.RESPONSES.get(int(status), "Unknown Status")
-    return f'{status} {to_unicode(message)}'
+    # Imported here to avoid a circular import.
+    from scrapy.responsetypes import responsetypes  # noqa: PLC0415
+
+    d = {**d, "headers": Headers(d.get("headers") or {})}
+    response_cls: type[Response] = (
+        load_object(d["_class"])
+        if "_class" in d
+        else responsetypes.from_args(
+            headers=d["headers"], url=d["url"], body=d.get("body")
+        )
+    )
+    return response_cls.from_dict(d)
 
 
-def response_httprepr(response):
-    """Return raw HTTP representation (as bytes) of the given response. This
-    is provided only for reference, since it's not the exact stream of bytes
-    that was received (that's not exposed by Twisted).
+def response_status_message(status: bytes | float | str) -> str:
+    """Return status code plus status text descriptive message"""
+    status_int = int(status)
+    message = responses.get(status_int, "Unknown Status")
+    return f"{status_int} {message}"
+
+
+_DOCTYPE_RE = re.compile(rb"\s*<!doctype[^<>]*>", re.IGNORECASE)
+
+
+def open_in_browser(
+    response: Response,
+    _openfunc: Callable[[str], Any] = webbrowser.open,
+) -> Any:
+    """Open *response* in a local web browser, adjusting the `base tag`_ for
+    external links to work, e.g. so that images and styles are displayed.
+
+    .. _base tag: https://www.w3schools.com/tags/tag_base.asp
+
+    For example:
+
+    .. code-block:: python
+
+        from scrapy.utils.response import open_in_browser
+
+
+        def parse_details(self, response):
+            if "item name" not in response.text:
+                open_in_browser(response)
+
+    On the Windows Subsystem for Linux, set the ``BROWSER`` environment
+    variable to `wslview <https://github.com/wslutilities/wslu>`_ to open the
+    response in a Windows browser, which cannot read Linux paths otherwise.
     """
-    values = [
-        b"HTTP/1.1 ",
-        to_bytes(str(response.status)),
-        b" ",
-        to_bytes(http.RESPONSES.get(response.status, b'')),
-        b"\r\n",
-    ]
-    if response.headers:
-        values.extend([response.headers.to_string(), b"\r\n"])
-    values.extend([b"\r\n", response.body])
-    return b"".join(values)
+    # circular imports
+    from scrapy.http import HtmlResponse, TextResponse  # noqa: PLC0415
 
-
-def open_in_browser(response, _openfunc=webbrowser.open):
-    """Open the given response in a local web browser, populating the <base>
-    tag for external links to work
-    """
-    from scrapy.http import HtmlResponse, TextResponse
-    # XXX: this implementation is a bit dirty and could be improved
     body = response.body
     if isinstance(response, HtmlResponse):
-        if b'<base' not in body:
-            repl = f'<head><base href="{response.url}">'
-            body = body.replace(b'<head>', to_bytes(repl))
-        ext = '.html'
+        # Web browsers move a base tag that precedes the head element into it,
+        # so the head element does not need to be found, which is not always
+        # possible. The base tag must come after the doctype declaration, if
+        # any, to keep the browser out of quirks mode. It takes precedence over
+        # any base tag of the response, and matches it when there is one.
+        doctype = _DOCTYPE_RE.match(body)
+        index = doctype.end() if doctype else 0
+        base_tag = f'<base href="{response.base_url}">'.encode()
+        body = body[:index] + base_tag + body[index:]
+        ext = ".html"
     elif isinstance(response, TextResponse):
-        ext = '.txt'
+        ext = ".txt"
     else:
-        raise TypeError("Unsupported response type: "
-                        f"{response.__class__.__name__}")
+        content_type = (response.headers.get(b"Content-Type") or b"").decode("latin-1")
+        mimetype = content_type.split(";")[0].strip().lower()
+        ext = mimetypes.guess_extension(mimetype) or ""
+        if not ext:
+            raise TypeError(f"Unsupported response type: {response.__class__.__name__}")
     fd, fname = tempfile.mkstemp(ext)
     os.write(fd, body)
     os.close(fd)

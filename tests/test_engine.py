@@ -1,451 +1,687 @@
-"""
-Scrapy engine tests
+from __future__ import annotations
 
-This starts a testing web server (using twisted.server.Site) and then crawls it
-with the Scrapy crawler.
-
-To view the testing web server in a browser you can start it by running this
-module with the ``runserver`` argument::
-
-    python test_engine.py runserver
-"""
-
-import os
-import re
+import asyncio
+import logging
+import subprocess
 import sys
-from collections import defaultdict
-from urllib.parse import urlparse
+from typing import TYPE_CHECKING, Any
+from unittest.mock import AsyncMock, Mock, patch
 
-import attr
-from itemadapter import ItemAdapter
-from pydispatch import dispatcher
-from testfixtures import LogCapture
-from twisted.internet import defer, reactor
-from twisted.trial import unittest
-from twisted.web import server, static, util
+import pytest
+from twisted.internet.defer import succeed
+from twisted.python.failure import Failure
 
 from scrapy import signals
-from scrapy.core.engine import ExecutionEngine
-from scrapy.exceptions import StopDownload
-from scrapy.http import Request
-from scrapy.item import Item, Field
-from scrapy.linkextractors import LinkExtractor
+from scrapy.core.downloader import Downloader
+from scrapy.core.downloader.handlers.base import BaseDownloadHandler
+from scrapy.core.engine import EngineState, ExecutionEngine, _Slot
+from scrapy.core.scheduler import BaseScheduler
+from scrapy.exceptions import (
+    CloseSpider,
+    DontCloseSpider,
+    DownloadCancelledError,
+    IgnoreRequest,
+)
+from scrapy.http import Request, Response
 from scrapy.spiders import Spider
-from scrapy.utils.signal import disconnect_all
+from scrapy.utils.asyncio import sleep
+from scrapy.utils.defer import (
+    _schedule_coro,
+    deferred_from_coro,
+    maybe_deferred_to_future,
+)
+from scrapy.utils.misc import build_from_crawler
+from scrapy.utils.spider import DefaultSpider
 from scrapy.utils.test import get_crawler
+from tests.spiders import SingleRequestSpider
+from tests.utils.bases.engine import TestEngineBase
+from tests.utils.decorators import coroutine_test, inline_callbacks_test
+from tests.utils.engine import (
+    AttrsItemsSpider,
+    CrawlerRun,
+    DataClassItemsSpider,
+    DictItemsSpider,
+    MySpider,
+)
 
-from tests import get_testdata, tests_datadir
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Generator
 
+    from twisted.internet.defer import Deferred
 
-class TestItem(Item):
-    name = Field()
-    url = Field()
-    price = Field()
-
-
-@attr.s
-class AttrsItem:
-    name = attr.ib(default="")
-    url = attr.ib(default="")
-    price = attr.ib(default=0)
-
-
-class TestSpider(Spider):
-    name = "scrapytest.org"
-    allowed_domains = ["scrapytest.org", "localhost"]
-
-    itemurl_re = re.compile(r"item\d+.html")
-    name_re = re.compile(r"<h1>(.*?)</h1>", re.M)
-    price_re = re.compile(r">Price: \$(.*?)<", re.M)
-
-    item_cls = TestItem
-
-    def parse(self, response):
-        xlink = LinkExtractor()
-        itemre = re.compile(self.itemurl_re)
-        for link in xlink.extract_links(response):
-            if itemre.search(link.url):
-                yield Request(url=link.url, callback=self.parse_item)
-
-    def parse_item(self, response):
-        item = self.item_cls()
-        m = self.name_re.search(response.text)
-        if m:
-            item['name'] = m.group(1)
-        item['url'] = response.url
-        m = self.price_re.search(response.text)
-        if m:
-            item['price'] = m.group(1)
-        return item
+    from scrapy.crawler import Crawler
+    from tests.mockserver.http import MockServer
 
 
-class TestDupeFilterSpider(TestSpider):
-    def start_requests(self):
-        return (Request(url) for url in self.start_urls)  # no dont_filter=True
+class DupeFilterSpider(MySpider):
+    async def start(self):
+        for url in self.start_urls:
+            yield Request(url)  # no dont_filter=True
 
 
-class DictItemsSpider(TestSpider):
-    item_cls = dict
-
-
-class AttrsItemsSpider(TestSpider):
-    item_class = AttrsItem
-
-
-try:
-    from dataclasses import make_dataclass
-except ImportError:
-    DataClassItemsSpider = None
-else:
-    TestDataClass = make_dataclass("TestDataClass", [("name", str), ("url", str), ("price", int)])
-
-    class DataClassItemsSpider(DictItemsSpider):
-        def parse_item(self, response):
-            item = super().parse_item(response)
-            return TestDataClass(
-                name=item.get('name'),
-                url=item.get('url'),
-                price=item.get('price'),
-            )
-
-
-class ItemZeroDivisionErrorSpider(TestSpider):
+class ItemZeroDivisionErrorSpider(MySpider):
     custom_settings = {
         "ITEM_PIPELINES": {
-            "tests.pipelines.ProcessWithZeroDivisionErrorPipiline": 300,
+            "tests.pipelines.ProcessWithZeroDivisionErrorPipeline": 300,
         }
     }
 
 
-def start_test_site(debug=False):
-    root_dir = os.path.join(tests_datadir, "test_site")
-    r = static.File(root_dir)
-    r.putChild(b"redirect", util.Redirect(b"/redirected"))
-    r.putChild(b"redirected", static.Data(b"Redirected here", "text/plain"))
-    numbers = [str(x).encode("utf8") for x in range(2**18)]
-    r.putChild(b"numbers", static.Data(b"".join(numbers), "text/plain"))
+class ChangeCloseReasonSpider(MySpider):
+    @classmethod
+    def from_crawler(cls, crawler, *args, **kwargs):
+        spider = cls(*args, **kwargs)
+        spider._set_crawler(crawler)
+        crawler.signals.connect(spider.spider_idle, signals.spider_idle)
+        return spider
 
-    port = reactor.listenTCP(0, server.Site(r), interface="127.0.0.1")
-    if debug:
-        print(f"Test server running at http://localhost:{port.getHost().port}/ "
-              "- hit Ctrl-C to finish.")
-    return port
+    def spider_idle(self):
+        raise CloseSpider(reason="custom_reason")
 
 
-class CrawlerRun:
-    """A class to run the crawler and keep track of events occurred"""
-
-    def __init__(self, spider_class):
-        self.spider = None
-        self.respplug = []
-        self.reqplug = []
-        self.reqdropped = []
-        self.reqreached = []
-        self.itemerror = []
-        self.itemresp = []
-        self.bytes = defaultdict(lambda: list())
-        self.signals_caught = {}
-        self.spider_class = spider_class
-
-    def run(self):
-        self.port = start_test_site()
-        self.portno = self.port.getHost().port
-
-        start_urls = [
-            self.geturl("/"),
-            self.geturl("/redirect"),
-            self.geturl("/redirect"),  # duplicate
-            self.geturl("/numbers"),
-        ]
-
-        for name, signal in vars(signals).items():
-            if not name.startswith('_'):
-                dispatcher.connect(self.record_signal, signal)
-
-        self.crawler = get_crawler(self.spider_class)
-        self.crawler.signals.connect(self.item_scraped, signals.item_scraped)
-        self.crawler.signals.connect(self.item_error, signals.item_error)
-        self.crawler.signals.connect(self.bytes_received, signals.bytes_received)
-        self.crawler.signals.connect(self.request_scheduled, signals.request_scheduled)
-        self.crawler.signals.connect(self.request_dropped, signals.request_dropped)
-        self.crawler.signals.connect(self.request_reached, signals.request_reached_downloader)
-        self.crawler.signals.connect(self.response_downloaded, signals.response_downloaded)
-        self.crawler.crawl(start_urls=start_urls)
-        self.spider = self.crawler.spider
-
-        self.deferred = defer.Deferred()
-        dispatcher.connect(self.stop, signals.engine_stopped)
-        return self.deferred
-
-    def stop(self):
-        self.port.stopListening()
-        for name, signal in vars(signals).items():
-            if not name.startswith('_'):
-                disconnect_all(signal)
-        self.deferred.callback(None)
-
-    def geturl(self, path):
-        return f"http://localhost:{self.portno}{path}"
-
-    def getpath(self, url):
-        u = urlparse(url)
-        return u.path
-
-    def item_error(self, item, response, spider, failure):
-        self.itemerror.append((item, response, spider, failure))
-
-    def item_scraped(self, item, spider, response):
-        self.itemresp.append((item, response))
-
-    def bytes_received(self, data, request, spider):
-        self.bytes[request].append(data)
-
-    def request_scheduled(self, request, spider):
-        self.reqplug.append((request, spider))
-
-    def request_reached(self, request, spider):
-        self.reqreached.append((request, spider))
-
-    def request_dropped(self, request, spider):
-        self.reqdropped.append((request, spider))
-
-    def response_downloaded(self, response, spider):
-        self.respplug.append((response, spider))
-
-    def record_signal(self, *args, **kwargs):
-        """Record a signal and its parameters"""
-        signalargs = kwargs.copy()
-        sig = signalargs.pop('signal')
-        signalargs.pop('sender', None)
-        self.signals_caught[sig] = signalargs
+class ErrorCloseReasonSpider(ChangeCloseReasonSpider):
+    def spider_idle(self):
+        raise CloseSpider(reason="custom_reason", error=True)
 
 
-class StopDownloadCrawlerRun(CrawlerRun):
-    """
-    Make sure raising the StopDownload exception stops the download of the response body
-    """
+class TestEngine(TestEngineBase):
+    @pytest.mark.parametrize(
+        "spider", [MySpider, DictItemsSpider, AttrsItemsSpider, DataClassItemsSpider]
+    )
+    @coroutine_test
+    async def test_crawler(
+        self, spider: type[MySpider], mockserver: MockServer
+    ) -> None:
+        run = CrawlerRun(spider)
+        await run.run(mockserver)
+        self._assert_visited_urls(run)
+        self._assert_scheduled_requests(run, count=9)
+        self._assert_downloaded_responses(run, count=9)
+        self._assert_scraped_items(run)
+        self._assert_signals_caught(run)
+        self._assert_headers_received(run)
+        self._assert_bytes_received(run)
 
-    def bytes_received(self, data, request, spider):
-        super().bytes_received(data, request, spider)
-        raise StopDownload(fail=False)
+    @coroutine_test
+    async def test_crawler_dupefilter(self, mockserver: MockServer) -> None:
+        run = CrawlerRun(DupeFilterSpider)
+        await run.run(mockserver)
+        self._assert_scheduled_requests(run, count=8)
+        self._assert_dropped_requests(run)
 
+    @coroutine_test
+    async def test_crawler_itemerror(self, mockserver: MockServer) -> None:
+        run = CrawlerRun(ItemZeroDivisionErrorSpider)
+        await run.run(mockserver)
+        self._assert_items_error(run)
 
-class EngineTest(unittest.TestCase):
+    @coroutine_test
+    async def test_crawler_change_close_reason_on_idle(
+        self, mockserver: MockServer
+    ) -> None:
+        run = CrawlerRun(ChangeCloseReasonSpider)
+        await run.run(mockserver)
+        assert {
+            "spider": run.crawler.spider,
+            "reason": "custom_reason",
+            "error": False,
+        } == run.signals_caught[signals.spider_closed]
 
-    @defer.inlineCallbacks
-    def test_crawler(self):
+    @coroutine_test
+    async def test_crawler_change_close_reason_and_error_on_idle(
+        self, mockserver: MockServer
+    ) -> None:
+        run = CrawlerRun(ErrorCloseReasonSpider)
+        await run.run(mockserver)
+        assert {
+            "spider": run.crawler.spider,
+            "reason": "custom_reason",
+            "error": True,
+        } == run.signals_caught[signals.spider_closed]
+        assert run.crawler.stats.get_value("finish_reason_error") is True
 
-        for spider in (TestSpider, DictItemsSpider, AttrsItemsSpider, DataClassItemsSpider):
-            if spider is None:
-                continue
-            self.run = CrawlerRun(spider)
-            yield self.run.run()
-            self._assert_visited_urls()
-            self._assert_scheduled_requests(urls_to_visit=9)
-            self._assert_downloaded_responses()
-            self._assert_scraped_items()
-            self._assert_signals_caught()
-            self._assert_bytes_received()
+    @coroutine_test
+    async def test_close_downloader(self):
+        e = ExecutionEngine(get_crawler(MySpider))
+        await e.close_async()
 
-    @defer.inlineCallbacks
-    def test_crawler_dupefilter(self):
-        self.run = CrawlerRun(TestDupeFilterSpider)
-        yield self.run.run()
-        self._assert_scheduled_requests(urls_to_visit=8)
-        self._assert_dropped_requests()
+    def test_close_without_downloader(self):
+        class CustomException(Exception):
+            pass
 
-    @defer.inlineCallbacks
-    def test_crawler_itemerror(self):
-        self.run = CrawlerRun(ItemZeroDivisionErrorSpider)
-        yield self.run.run()
-        self._assert_items_error()
+        class BadDownloader:
+            def __init__(self, crawler):
+                raise CustomException
 
-    def _assert_visited_urls(self):
-        must_be_visited = ["/", "/redirect", "/redirected",
-                           "/item1.html", "/item2.html", "/item999.html"]
-        urls_visited = {rp[0].url for rp in self.run.respplug}
-        urls_expected = {self.run.geturl(p) for p in must_be_visited}
-        assert urls_expected <= urls_visited, f"URLs not visited: {list(urls_expected - urls_visited)}"
+        with pytest.raises(CustomException):
+            ExecutionEngine(get_crawler(MySpider, {"DOWNLOADER": BadDownloader}))
 
-    def _assert_scheduled_requests(self, urls_to_visit=None):
-        self.assertEqual(urls_to_visit, len(self.run.reqplug))
+    @inline_callbacks_test
+    def test_start_already_running_exception(self):
+        crawler = get_crawler(DefaultSpider)
+        crawler.spider = crawler._create_spider()
+        e = ExecutionEngine(crawler)
+        crawler.engine = e
+        yield deferred_from_coro(e.open_spider_async())
+        _schedule_coro(e.start_async())
+        with pytest.raises(RuntimeError, match=r"in the (STARTING|RUNNING) state"):
+            yield deferred_from_coro(e.start_async())
+        yield deferred_from_coro(e.stop_async())
 
-        paths_expected = ['/item999.html', '/item2.html', '/item1.html']
+    @coroutine_test
+    async def test_stop_async_force_mode_not_supported(self) -> None:
+        engine = ExecutionEngine(get_crawler(DefaultSpider))
 
-        urls_requested = {rq[0].url for rq in self.run.reqplug}
-        urls_expected = {self.run.geturl(p) for p in paths_expected}
-        assert urls_expected <= urls_requested
-        scheduled_requests_count = len(self.run.reqplug)
-        dropped_requests_count = len(self.run.reqdropped)
-        responses_count = len(self.run.respplug)
-        self.assertEqual(scheduled_requests_count,
-                         dropped_requests_count + responses_count)
-        self.assertEqual(len(self.run.reqreached),
-                         responses_count)
+        with pytest.raises(ValueError, match="force stop mode is not supported"):
+            await engine.stop_async(mode="force")
 
-    def _assert_dropped_requests(self):
-        self.assertEqual(len(self.run.reqdropped), 1)
+    @coroutine_test
+    async def test_stop_async_not_running_raises(self) -> None:
+        engine = ExecutionEngine(get_crawler(DefaultSpider))
 
-    def _assert_downloaded_responses(self):
-        # response tests
-        self.assertEqual(9, len(self.run.respplug))
-        self.assertEqual(9, len(self.run.reqreached))
+        with pytest.raises(RuntimeError, match="Spider not opened"):
+            await engine.stop_async()
 
-        for response, _ in self.run.respplug:
-            if self.run.getpath(response.url) == '/item999.html':
-                self.assertEqual(404, response.status)
-            if self.run.getpath(response.url) == '/redirect':
-                self.assertEqual(302, response.status)
+    @coroutine_test
+    async def test_stop_async_reentrant_fast_drops_downloads(self) -> None:
+        """A fast stop requested while the spider is already closing drops
+        the in-flight downloads, and returns without waiting for the close."""
+        engine = ExecutionEngine(get_crawler(DefaultSpider))
+        engine._state = EngineState.SPIDER_CLOSING
 
-    def _assert_items_error(self):
-        self.assertEqual(2, len(self.run.itemerror))
-        for item, response, spider, failure in self.run.itemerror:
-            self.assertEqual(failure.value.__class__, ZeroDivisionError)
-            self.assertEqual(spider, self.run.spider)
+        with patch.object(
+            engine, "_fast_stop_downloader", new_callable=AsyncMock
+        ) as fast_stop:
+            await engine.stop_async(mode="fast")
 
-            self.assertEqual(item['url'], response.url)
-            if 'item1.html' in item['url']:
-                self.assertEqual('Item 1 name', item['name'])
-                self.assertEqual('100', item['price'])
-            if 'item2.html' in item['url']:
-                self.assertEqual('Item 2 name', item['name'])
-                self.assertEqual('200', item['price'])
+        fast_stop.assert_awaited_once()
+        assert engine._stop_mode == "fast"
 
-    def _assert_scraped_items(self):
-        self.assertEqual(2, len(self.run.itemresp))
-        for item, response in self.run.itemresp:
-            item = ItemAdapter(item)
-            self.assertEqual(item['url'], response.url)
-            if 'item1.html' in item['url']:
-                self.assertEqual('Item 1 name', item['name'])
-                self.assertEqual('100', item['price'])
-            if 'item2.html' in item['url']:
-                self.assertEqual('Item 2 name', item['name'])
-                self.assertEqual('200', item['price'])
+    @coroutine_test
+    async def test_stop_async_reentrant_graceful_is_noop(self) -> None:
+        engine = ExecutionEngine(get_crawler(DefaultSpider))
+        engine._state = EngineState.SPIDER_CLOSING
 
-    def _assert_bytes_received(self):
-        self.assertEqual(9, len(self.run.bytes))
-        for request, data in self.run.bytes.items():
-            joined_data = b"".join(data)
-            if self.run.getpath(request.url) == "/":
-                self.assertEqual(joined_data, get_testdata("test_site", "index.html"))
-            elif self.run.getpath(request.url) == "/item1.html":
-                self.assertEqual(joined_data, get_testdata("test_site", "item1.html"))
-            elif self.run.getpath(request.url) == "/item2.html":
-                self.assertEqual(joined_data, get_testdata("test_site", "item2.html"))
-            elif self.run.getpath(request.url) == "/redirected":
-                self.assertEqual(joined_data, b"Redirected here")
-            elif self.run.getpath(request.url) == '/redirect':
-                self.assertEqual(
-                    joined_data,
-                    b"\n<html>\n"
-                    b"    <head>\n"
-                    b"        <meta http-equiv=\"refresh\" content=\"0;URL=/redirected\">\n"
-                    b"    </head>\n"
-                    b"    <body bgcolor=\"#FFFFFF\" text=\"#000000\">\n"
-                    b"    <a href=\"/redirected\">click here</a>\n"
-                    b"    </body>\n"
-                    b"</html>\n"
-                )
-            elif self.run.getpath(request.url) == "/tem999.html":
-                self.assertEqual(
-                    joined_data,
-                    b"\n<html>\n"
-                    b"  <head><title>404 - No Such Resource</title></head>\n"
-                    b"  <body>\n"
-                    b"    <h1>No Such Resource</h1>\n"
-                    b"    <p>File not found.</p>\n"
-                    b"  </body>\n"
-                    b"</html>\n"
-                )
-            elif self.run.getpath(request.url) == "/numbers":
-                # signal was fired multiple times
-                self.assertTrue(len(data) > 1)
-                # bytes were received in order
-                numbers = [str(x).encode("utf8") for x in range(2**18)]
-                self.assertEqual(joined_data, b"".join(numbers))
+        with patch.object(
+            engine, "_fast_stop_downloader", new_callable=AsyncMock
+        ) as fast_stop:
+            await engine.stop_async(mode="graceful")
 
-    def _assert_signals_caught(self):
-        assert signals.engine_started in self.run.signals_caught
-        assert signals.engine_stopped in self.run.signals_caught
-        assert signals.spider_opened in self.run.signals_caught
-        assert signals.spider_idle in self.run.signals_caught
-        assert signals.spider_closed in self.run.signals_caught
+        fast_stop.assert_not_called()
 
-        self.assertEqual({'spider': self.run.spider},
-                         self.run.signals_caught[signals.spider_opened])
-        self.assertEqual({'spider': self.run.spider},
-                         self.run.signals_caught[signals.spider_idle])
-        self.assertEqual({'spider': self.run.spider, 'reason': 'finished'},
-                         self.run.signals_caught[signals.spider_closed])
+    @coroutine_test
+    async def test_handle_downloader_output_ignores_fast_cancelled_failures(
+        self,
+    ) -> None:
+        engine = ExecutionEngine(get_crawler(DefaultSpider))
+        engine.spider = Mock()
+        engine._stop_mode = "fast"
 
-    @defer.inlineCallbacks
-    def test_close_downloader(self):
-        e = ExecutionEngine(get_crawler(TestSpider), lambda _: None)
-        yield e.close()
+        enqueue_scrape = Mock()
+        engine.scraper.enqueue_scrape = enqueue_scrape  # type: ignore[method-assign]
 
-    @defer.inlineCallbacks
-    def test_close_spiders_downloader(self):
-        e = ExecutionEngine(get_crawler(TestSpider), lambda _: None)
-        yield e.open_spider(TestSpider(), [])
-        self.assertEqual(len(e.open_spiders), 1)
-        yield e.close()
-        self.assertEqual(len(e.open_spiders), 0)
+        result = Failure(DownloadCancelledError("dropped during fast stop"))
+        await maybe_deferred_to_future(
+            engine._handle_downloader_output(result, Request("https://example.com"))
+        )
 
-    @defer.inlineCallbacks
-    def test_close_engine_spiders_downloader(self):
-        e = ExecutionEngine(get_crawler(TestSpider), lambda _: None)
-        yield e.open_spider(TestSpider(), [])
-        e.start()
-        self.assertTrue(e.running)
-        yield e.close()
-        self.assertFalse(e.running)
-        self.assertEqual(len(e.open_spiders), 0)
+        enqueue_scrape.assert_not_called()
 
+    @pytest.mark.only_asyncio
+    @coroutine_test
+    async def test_start_already_running_exception_asyncio(self):
+        crawler = get_crawler(DefaultSpider)
+        crawler.spider = crawler._create_spider()
+        e = ExecutionEngine(crawler)
+        crawler.engine = e
+        await e.open_spider_async()
+        with pytest.raises(RuntimeError, match=r"in the (STARTING|RUNNING) state"):
+            await asyncio.gather(e.start_async(), e.start_async())
+        await e.stop_async()
 
-class StopDownloadEngineTest(EngineTest):
+    @coroutine_test
+    async def test_start_request_processing_exception(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        class BadRequestFingerprinter:
+            def fingerprint(self, request):
+                raise ValueError  # to make Scheduler.enqueue_request() fail
 
-    @defer.inlineCallbacks
-    def test_crawler(self):
-        for spider in TestSpider, DictItemsSpider:
-            self.run = StopDownloadCrawlerRun(spider)
-            with LogCapture() as log:
-                yield self.run.run()
-                log.check_present(("scrapy.core.downloader.handlers.http11",
-                                   "DEBUG",
-                                   f"Download stopped for <GET http://localhost:{self.run.portno}/redirected> "
-                                   "from signal handler"
-                                   " StopDownloadCrawlerRun.bytes_received"))
-                log.check_present(("scrapy.core.downloader.handlers.http11",
-                                   "DEBUG",
-                                   f"Download stopped for <GET http://localhost:{self.run.portno}/> "
-                                   "from signal handler"
-                                   " StopDownloadCrawlerRun.bytes_received"))
-                log.check_present(("scrapy.core.downloader.handlers.http11",
-                                   "DEBUG",
-                                   f"Download stopped for <GET http://localhost:{self.run.portno}/numbers> "
-                                   "from signal handler"
-                                   " StopDownloadCrawlerRun.bytes_received"))
-            self._assert_visited_urls()
-            self._assert_scheduled_requests(urls_to_visit=9)
-            self._assert_downloaded_responses()
-            self._assert_signals_caught()
-            self._assert_bytes_received()
+        class SimpleSpider(Spider):
+            name = "simple"
 
-    def _assert_bytes_received(self):
-        self.assertEqual(9, len(self.run.bytes))
-        for request, data in self.run.bytes.items():
-            joined_data = b"".join(data)
-            self.assertTrue(len(data) == 1)  # signal was fired only once
-            if self.run.getpath(request.url) == "/numbers":
-                # Received bytes are not the complete response. The exact amount depends
-                # on the buffer size, which can vary, so we only check that the amount
-                # of received bytes is strictly less than the full response.
-                numbers = [str(x).encode("utf8") for x in range(2**18)]
-                self.assertTrue(len(joined_data) < len(b"".join(numbers)))
+            async def start(self):
+                yield Request("data:,")
+
+        crawler = get_crawler(
+            SimpleSpider, {"REQUEST_FINGERPRINTER_CLASS": BadRequestFingerprinter}
+        )
+        with caplog.at_level(logging.DEBUG):
+            await crawler.crawl_async()
+        assert "Error while processing requests from start()" in caplog.text
+        assert "Spider closed (shutdown)" in caplog.text
+
+    def test_short_timeout(self):
+        args = (
+            sys.executable,
+            "-m",
+            "scrapy.cmdline",
+            "fetch",
+            "-s",
+            "CLOSESPIDER_TIMEOUT=0.001",
+            "-s",
+            "LOG_LEVEL=DEBUG",
+            "http://toscrape.com",
+        )
+        p = subprocess.Popen(
+            args,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
+
+        try:
+            _, stderr = p.communicate(timeout=15)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            p.communicate()
+            pytest.fail("Command took too much time to complete")
+
+        stderr_str = stderr.decode()
+        assert "AttributeError" not in stderr_str, stderr_str
+        assert "AssertionError" not in stderr_str, stderr_str
 
 
-if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == 'runserver':
-        start_test_site(debug=True)
-        reactor.run()
+@coroutine_test
+async def test_request_scheduled_signal():
+    class TestScheduler(BaseScheduler):
+        def __init__(self) -> None:
+            self.enqueued: list[Request] = []
+
+        def enqueue_request(self, request: Request) -> bool:
+            self.enqueued.append(request)
+            return True
+
+    def signal_handler(request: Request, spider: Spider) -> None:
+        if "drop" in request.url:
+            raise IgnoreRequest
+
+    crawler = get_crawler(MySpider)
+    engine = ExecutionEngine(crawler)
+    scheduler = build_from_crawler(TestScheduler, crawler)
+
+    async def start() -> AsyncIterator[Any]:
+        return
+        yield
+
+    engine._start = start()
+    engine._slot = _Slot(False, Mock(), scheduler)
+    crawler.signals.connect(signal_handler, signals.request_scheduled)
+    keep_request = Request("https://keep.example")
+    engine._schedule_request(keep_request)
+    drop_request = Request("https://drop.example")
+    engine._schedule_request(drop_request)
+    assert scheduler.enqueued == [keep_request], (
+        f"{scheduler.enqueued!r} != [{keep_request!r}]"
+    )
+    crawler.signals.disconnect(signal_handler, signals.request_scheduled)
+
+
+class ClosingPipeline:
+    def open_spider(self):
+        raise CloseSpider("pipeline_reason")
+
+
+class TestCloseSpiderOnStartup:
+    @coroutine_test
+    async def test_pipeline(self, caplog: pytest.LogCaptureFixture) -> None:
+        closed: list[str] = []
+
+        def spider_closed(reason: str) -> None:
+            closed.append(reason)
+
+        crawler = get_crawler(DefaultSpider, {"ITEM_PIPELINES": {ClosingPipeline: 1}})
+        crawler.signals.connect(spider_closed, signals.spider_closed)
+        with caplog.at_level(logging.INFO):
+            await crawler.crawl_async()
+        assert crawler.stats.get_value("finish_reason") == "pipeline_reason"
+        assert closed == ["pipeline_reason"]
+        assert "Traceback" not in caplog.text
+
+    @coroutine_test
+    async def test_spider_opened(self) -> None:
+        def spider_opened(spider: Spider) -> None:
+            raise CloseSpider("signal_reason")
+
+        crawler = get_crawler(DefaultSpider)
+        crawler.signals.connect(spider_opened, signals.spider_opened)
+        await crawler.crawl_async()
+        assert crawler.stats.get_value("finish_reason") == "signal_reason"
+
+    @coroutine_test
+    async def test_startup_wins_over_spider_opened(self) -> None:
+        def spider_opened(spider: Spider) -> None:
+            raise CloseSpider("signal_reason")
+
+        crawler = get_crawler(DefaultSpider, {"ITEM_PIPELINES": {ClosingPipeline: 1}})
+        crawler.signals.connect(spider_opened, signals.spider_opened)
+        await crawler.crawl_async()
+        assert crawler.stats.get_value("finish_reason") == "pipeline_reason"
+
+    @inline_callbacks_test
+    def test_deferred_crawl(self) -> Generator[Deferred[Any], Any, None]:
+        crawler = get_crawler(DefaultSpider, {"ITEM_PIPELINES": {ClosingPipeline: 1}})
+        yield crawler.crawl()
+        assert crawler.stats.get_value("finish_reason") == "pipeline_reason"
+
+
+class TestMisuse:
+    """The engine raises on operations that its state does not allow."""
+
+    @coroutine_test
+    async def test_stop_not_running(self) -> None:
+        engine = ExecutionEngine(get_crawler(DefaultSpider))
+        try:
+            with pytest.raises(RuntimeError, match="Spider not opened"):
+                await engine.stop_async()
+        finally:
+            await engine.close_async()
+
+    def test_invalid_scheduler_class(self) -> None:
+        class NotAScheduler:
+            pass
+
+        with pytest.raises(
+            TypeError, match="does not fully implement the scheduler interface"
+        ):
+            ExecutionEngine(get_crawler(DefaultSpider, {"SCHEDULER": NotAScheduler}))
+
+    @coroutine_test
+    async def test_spider_is_idle_without_slot(self) -> None:
+        engine = ExecutionEngine(get_crawler(DefaultSpider))
+        try:
+            with pytest.raises(RuntimeError, match="Engine slot not assigned"):
+                engine.spider_is_idle()
+        finally:
+            await engine.close_async()
+
+    @coroutine_test
+    async def test_crawl_without_spider(self) -> None:
+        engine = ExecutionEngine(get_crawler(DefaultSpider))
+        try:
+            with pytest.raises(RuntimeError, match="No open spider to crawl"):
+                engine.crawl(Request("data:,"))
+        finally:
+            await engine.close_async()
+
+    @coroutine_test
+    async def test_open_spider_twice(self) -> None:
+        crawler = get_crawler(DefaultSpider)
+        crawler.spider = crawler._create_spider()
+        engine = crawler.engine = ExecutionEngine(crawler)
+        await engine.open_spider_async()
+        try:
+            with pytest.raises(RuntimeError, match="No free spider slot"):
+                await engine.open_spider_async()
+        finally:
+            await engine.close_async()
+
+
+@coroutine_test
+async def test_progress_before_open() -> None:
+    engine = ExecutionEngine(get_crawler(DefaultSpider))
+    try:
+        assert engine.requests_in_progress == frozenset()
+        assert engine.items_in_progress == 0
+        assert engine.response_active_size == 0
+    finally:
+        await engine.close_async()
+
+
+class BrokenScheduler(BaseScheduler):
+    """A scheduler that cannot be built."""
+
+    @classmethod
+    def from_crawler(cls, crawler: Any) -> BrokenScheduler:
+        raise ValueError("broken scheduler")
+
+    def has_pending_requests(self) -> bool:
+        return False
+
+    def enqueue_request(self, request: Request) -> bool:
+        return True
+
+    def next_request(self) -> Request | None:
+        return None
+
+
+@coroutine_test
+async def test_scheduler_creation_error() -> None:
+    """An error while building the scheduler is reported directly, instead of
+    other errors such as "Engine slot not assigned"."""
+    crawler = get_crawler(DefaultSpider, {"SCHEDULER": BrokenScheduler})
+    with pytest.raises(ValueError, match="broken scheduler"):
+        await crawler.crawl_async()
+    assert crawler.engine is not None
+    assert crawler.engine.spider is None
+
+
+@coroutine_test
+async def test_start_without_spider() -> None:
+    engine = ExecutionEngine(get_crawler(DefaultSpider))
+    try:
+        with pytest.raises(RuntimeError, match="in the CREATED state"):
+            await engine.start_async()
+    finally:
+        await engine.close_async()
+
+
+@coroutine_test
+async def test_stop_while_item_in_pipelines() -> None:
+    """A stop that starts while an item is going through the item pipelines
+    completes once that item is done."""
+
+    class StoppingPipeline:
+        async def process_item(self, item: Any) -> Any:
+            _schedule_coro(crawler.stop_async())
+            await sleep(0.1)
+            return item
+
+    class ItemSpider(Spider):
+        name = "item"
+
+        async def start(self) -> AsyncIterator[Any]:
+            yield {"a": "b"}
+
+    crawler = get_crawler(ItemSpider, {"ITEM_PIPELINES": {StoppingPipeline: 1}})
+    await crawler.crawl_async()
+    assert crawler.stats.get_value("item_scraped_count") == 1
+    assert crawler.stats.get_value("finish_reason") == "shutdown"
+
+
+@coroutine_test
+async def test_pause_unpause() -> None:
+    engine = ExecutionEngine(get_crawler(DefaultSpider))
+    try:
+        engine.pause()
+        assert engine.paused
+        engine.unpause()
+        assert not engine.paused
+    finally:
+        await engine.close_async()
+
+
+class TestSpiderIdle:
+    @coroutine_test
+    async def test_dont_close_spider(self) -> None:
+        """A ``DontCloseSpider`` handler keeps the spider open for one more loop."""
+        idle_calls = 0
+
+        def spider_idle() -> None:
+            nonlocal idle_calls
+            idle_calls += 1
+            if idle_calls == 1:
+                # Schedule a request so that the engine loops again soon
+                # instead of waiting for the slot heartbeat.
+                crawler.engine.crawl(Request("data:,"))
+                raise DontCloseSpider
+
+        crawler = get_crawler(DefaultSpider)
+        crawler.signals.connect(spider_idle, signals.spider_idle)
+        await crawler.crawl_async()
+        assert idle_calls == 2
+        assert crawler.stats.get_value("finish_reason") == "finished"
+
+    @coroutine_test
+    async def test_not_idle_anymore(self) -> None:
+        """A handler that schedules a request keeps the spider open."""
+        urls: list[str] = []
+
+        def spider_idle() -> None:
+            if not urls:
+                urls.append("data:,")
+                crawler.engine.crawl(Request(urls[0]))
+
+        crawler = get_crawler(DefaultSpider)
+        crawler.signals.connect(spider_idle, signals.spider_idle)
+        await crawler.crawl_async()
+        assert crawler.stats.get_value("downloader/request_count") == 1
+
+    @coroutine_test
+    async def test_request_not_in_downloader(self) -> None:
+        """The spider is not idle while a request taken from the scheduler is
+        not in the downloader yet."""
+
+        class SlowFetchDownloader(Downloader):
+            def fetch(self, request: Request) -> Deferred[Response | Request]:  # type: ignore[override]
+                return deferred_from_coro(self._slow_fetch(request))
+
+            async def _slow_fetch(self, request: Request) -> Response | Request:
+                await sleep(0.1)
+                return await maybe_deferred_to_future(super().fetch(request))
+
+        events: list[str] = []
+
+        def response_received() -> None:
+            events.append("response_received")
+
+        def spider_idle() -> None:
+            events.append("spider_idle")
+
+        crawler = get_crawler(SingleRequestSpider, {"DOWNLOADER": SlowFetchDownloader})
+        crawler.signals.connect(response_received, signals.response_received)
+        crawler.signals.connect(spider_idle, signals.spider_idle)
+        await crawler.crawl_async(seed="data:,")
+        assert events == ["response_received", "spider_idle"]
+
+    @coroutine_test
+    async def test_request_only_in_downloader(self) -> None:
+        """The spider is not idle while the downloader has a request that was
+        not sent through the engine."""
+
+        class SlowDownloadHandler(BaseDownloadHandler):
+            async def download_request(self, request: Request) -> Response:
+                await sleep(0.1)
+                return Response(request.url)
+
+        events: list[str] = []
+
+        class DirectFetchSpider(Spider):
+            name = "direct_fetch"
+
+            async def start(self) -> AsyncIterator[Any]:
+                yield Request("data:,")
+
+            def parse(self, response: Response) -> None:
+                assert self.crawler.engine is not None
+                d = self.crawler.engine.downloader.fetch(Request("slow://example.com"))
+                d.addCallback(self.fetched)
+
+            def fetched(self, result: Response | Request) -> None:
+                events.append("fetched")
+                # Schedule a request so that the engine loops again soon
+                # instead of waiting for the slot heartbeat.
+                assert self.crawler.engine is not None
+                self.crawler.engine.crawl(Request("data:,b", callback=self.noop))
+
+            def noop(self, response: Response) -> None:
+                pass
+
+        def spider_idle() -> None:
+            events.append("spider_idle")
+
+        crawler = get_crawler(
+            DirectFetchSpider, {"DOWNLOAD_HANDLERS": {"slow": SlowDownloadHandler}}
+        )
+        crawler.signals.connect(spider_idle, signals.spider_idle)
+        await crawler.crawl_async()
+        assert events == ["fetched", "spider_idle"]
+
+
+@coroutine_test
+async def test_download_wrong_type(caplog: pytest.LogCaptureFixture) -> None:
+    class WrongTypeDownloader(Downloader):
+        def fetch(self, request: Request) -> str:  # type: ignore[override]
+            return "not a response"
+
+    class WrongTypeSpider(Spider):
+        name = "wrong_type"
+
+        async def start(self):
+            yield Request("data:,")
+
+    crawler = get_crawler(WrongTypeSpider, {"DOWNLOADER": WrongTypeDownloader})
+    await crawler.crawl_async()
+    assert "expected Response or Request, got <class 'str'>" in caplog.text
+
+
+@coroutine_test
+async def test_download_async_custom_downloader() -> None:
+    class CustomDownloader:
+        def __init__(self, crawler: Crawler) -> None:
+            self.active: set[Request] = set()
+
+        def fetch(self, request: Request) -> Deferred[Response]:
+            return succeed(Response(request.url))
+
+        def needs_backout(self) -> bool:
+            return False
+
+        def close(self) -> None:
+            pass
+
+    responses: list[Response] = []
+
+    class DownloadAsyncSpider(Spider):
+        name = "download_async"
+
+        async def start(self):
+            assert self.crawler.engine is not None
+            responses.append(
+                await self.crawler.engine.download_async(Request("data:,"))
+            )
+            return
+            yield
+
+    crawler = get_crawler(DownloadAsyncSpider, {"DOWNLOADER": CustomDownloader})
+    await crawler.crawl_async()
+    assert [response.url for response in responses] == ["data:,"]
+
+
+@coroutine_test
+async def test_enqueue_scrape_error(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def enqueue_scrape(self, result, request):
+        raise ValueError("enqueue error")
+
+    monkeypatch.setattr("scrapy.core.engine.Scraper.enqueue_scrape", enqueue_scrape)
+
+    class SimpleSpider(Spider):
+        name = "simple"
+
+        async def start(self):
+            yield Request("data:,")
+
+    crawler = get_crawler(SimpleSpider)
+    await crawler.crawl_async()
+    assert "Error while enqueuing scrape" in caplog.text

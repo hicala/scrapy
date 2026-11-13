@@ -5,17 +5,16 @@ Requests and Responses
 ======================
 
 .. module:: scrapy.http
-   :synopsis: Request and Response classes
 
-Scrapy uses :class:`Request` and :class:`Response` objects for crawling web
-sites.
+Scrapy uses :class:`~scrapy.Request` and :class:`Response` objects for crawling
+websites.
 
-Typically, :class:`Request` objects are generated in the spiders and pass
+Typically, :class:`~scrapy.Request` objects are generated in the spiders and pass
 across the system until they reach the Downloader, which executes the request
 and returns a :class:`Response` object which travels back to the spider that
 issued the request.
 
-Both :class:`Request` and :class:`Response` classes have subclasses which add
+Both :class:`~scrapy.Request` and :class:`Response` classes have subclasses which add
 functionality not required in the base classes. These are described
 below in :ref:`topics-request-response-ref-request-subclasses` and
 :ref:`topics-request-response-ref-response-subclasses`.
@@ -24,138 +23,17 @@ below in :ref:`topics-request-response-ref-request-subclasses` and
 Request objects
 ===============
 
-.. autoclass:: Request
-
-    A :class:`Request` object represents an HTTP request, which is usually
-    generated in the Spider and executed by the Downloader, and thus generating
-    a :class:`Response`.
-
-    :param url: the URL of this request
-
-        If the URL is invalid, a :exc:`ValueError` exception is raised.
-    :type url: str
-
-    :param callback: the function that will be called with the response of this
-       request (once it's downloaded) as its first parameter. For more information
-       see :ref:`topics-request-response-ref-request-callback-arguments` below.
-       If a Request doesn't specify a callback, the spider's
-       :meth:`~scrapy.spiders.Spider.parse` method will be used.
-       Note that if exceptions are raised during processing, errback is called instead.
-
-    :type callback: collections.abc.Callable
-
-    :param method: the HTTP method of this request. Defaults to ``'GET'``.
-    :type method: str
-
-    :param meta: the initial values for the :attr:`Request.meta` attribute. If
-       given, the dict passed in this parameter will be shallow copied.
-    :type meta: dict
-
-    :param body: the request body. If a string is passed, then it's encoded as
-      bytes using the ``encoding`` passed (which defaults to ``utf-8``). If
-      ``body`` is not given, an empty bytes object is stored. Regardless of the
-      type of this argument, the final value stored will be a bytes object
-      (never a string or ``None``).
-    :type body: bytes or str
-
-    :param headers: the headers of this request. The dict values can be strings
-       (for single valued headers) or lists (for multi-valued headers). If
-       ``None`` is passed as value, the HTTP header will not be sent at all.
-
-        .. caution:: Cookies set via the ``Cookie`` header are not considered by the
-            :ref:`cookies-mw`. If you need to set cookies for a request, use the
-            :class:`Request.cookies <scrapy.http.Request>` parameter. This is a known
-            current limitation that is being worked on.
-
-    :type headers: dict
-
-    :param cookies: the request cookies. These can be sent in two forms.
-
-        1. Using a dict::
-
-            request_with_cookies = Request(url="http://www.example.com",
-                                           cookies={'currency': 'USD', 'country': 'UY'})
-
-        2. Using a list of dicts::
-
-            request_with_cookies = Request(url="http://www.example.com",
-                                           cookies=[{'name': 'currency',
-                                                    'value': 'USD',
-                                                    'domain': 'example.com',
-                                                    'path': '/currency'}])
-
-        The latter form allows for customizing the ``domain`` and ``path``
-        attributes of the cookie. This is only useful if the cookies are saved
-        for later requests.
-
-        .. reqmeta:: dont_merge_cookies
-
-        When some site returns cookies (in a response) those are stored in the
-        cookies for that domain and will be sent again in future requests.
-        That's the typical behaviour of any regular web browser.
-
-        To create a request that does not send stored cookies and does not
-        store received cookies, set the ``dont_merge_cookies`` key to ``True``
-        in :attr:`request.meta <scrapy.http.Request.meta>`.
-
-        Example of a request that sends manually-defined cookies and ignores
-        cookie storage::
-
-            Request(
-                url="http://www.example.com",
-                cookies={'currency': 'USD', 'country': 'UY'},
-                meta={'dont_merge_cookies': True},
-            )
-
-        For more info see :ref:`cookies-mw`.
-
-        .. caution:: Cookies set via the ``Cookie`` header are not considered by the
-            :ref:`cookies-mw`. If you need to set cookies for a request, use the
-            :class:`Request.cookies <scrapy.http.Request>` parameter. This is a known
-            current limitation that is being worked on.
-
-    :type cookies: dict or list
-
-    :param encoding: the encoding of this request (defaults to ``'utf-8'``).
-       This encoding will be used to percent-encode the URL and to convert the
-       body to bytes (if given as a string).
-    :type encoding: str
-
-    :param priority: the priority of this request (defaults to ``0``).
-       The priority is used by the scheduler to define the order used to process
-       requests.  Requests with a higher priority value will execute earlier.
-       Negative values are allowed in order to indicate relatively low-priority.
-    :type priority: int
-
-    :param dont_filter: indicates that this request should not be filtered by
-       the scheduler. This is used when you want to perform an identical
-       request multiple times, to ignore the duplicates filter. Use it with
-       care, or you will get into crawling loops. Default to ``False``.
-    :type dont_filter: bool
-
-    :param errback: a function that will be called if any exception was
-       raised while processing the request. This includes pages that failed
-       with 404 HTTP errors and such. It receives a
-       :exc:`~twisted.python.failure.Failure` as first parameter.
-       For more information,
-       see :ref:`topics-request-response-ref-errbacks` below.
-
-       .. versionchanged:: 2.0
-          The *callback* parameter is no longer required when the *errback*
-          parameter is specified.
-    :type errback: collections.abc.Callable
-
-    :param flags:  Flags sent to the request, can be used for logging or similar purposes.
-    :type flags: list
-
-    :param cb_kwargs: A dict with arbitrary data that will be passed as keyword arguments to the Request's callback.
-    :type cb_kwargs: dict
+.. autoclass:: scrapy.Request
 
     .. attribute:: Request.url
 
-        A string containing the URL of this request. Keep in mind that this
-        attribute contains the escaped URL, so it can differ from the URL passed in
-        the ``__init__`` method.
+        A string containing the URL of this request.
+
+        Keep in mind that this attribute contains the escaped URL, so it can
+        differ from the URL passed in the ``__init__()`` method.
+
+        If :reqmeta:`verbatim_url` is set to ``True``, the URL is kept as
+        passed to ``__init__()``.
 
         This attribute is read-only. To change the URL of a Request use
         :meth:`replace`.
@@ -167,7 +45,15 @@ Request objects
 
     .. attribute:: Request.headers
 
-        A dictionary-like object which contains the request headers.
+        A dictionary-like (:class:`scrapy.http.headers.Headers`) object which contains
+        the request headers.
+
+        .. versionchanged:: 2.20.0
+            Header names keep the case you write them in, instead of being
+            converted to ``Title-Case``.
+
+        Lookups are case-insensitive. Whether your case reaches the server
+        depends on the :ref:`download handler <download-handlers-ref>`.
 
     .. attribute:: Request.body
 
@@ -176,26 +62,18 @@ Request objects
         This attribute is read-only. To change the body of a Request use
         :meth:`replace`.
 
-    .. attribute:: Request.meta
+    .. autoattribute:: callback
 
-        A dict that contains arbitrary metadata for this request. This dict is
-        empty for new Requests, and is usually  populated by different Scrapy
-        components (extensions, middlewares, etc). So the data contained in this
-        dict depends on the extensions you have enabled.
+    .. autoattribute:: errback
 
-        See :ref:`topics-request-meta` for a list of special meta keys
-        recognized by Scrapy.
-
-        This dict is :doc:`shallow copied <library/copy>` when the request is
-        cloned using the ``copy()`` or ``replace()`` methods, and can also be
-        accessed, in your spider, from the ``response.meta`` attribute.
+    .. autoattribute:: priority
 
     .. attribute:: Request.cb_kwargs
 
         A dictionary that contains arbitrary metadata for this request. Its contents
         will be passed to the Request's callback as keyword arguments. It is empty
-        for new Requests, which means by default callbacks only get a :class:`Response`
-        object as argument.
+        for new Requests, which means by default callbacks only get a
+        :class:`~scrapy.http.Response` object as argument.
 
         This dict is :doc:`shallow copied <library/copy>` when the request is
         cloned using the ``copy()`` or ``replace()`` methods, and can also be
@@ -205,53 +83,593 @@ Request objects
         ``failure.request.cb_kwargs`` in the request's errback. For more information,
         see :ref:`errback-cb_kwargs`.
 
+        .. note:: When :setting:`JOBDIR` is set, requests are serialized to disk
+            with :mod:`pickle` (see :ref:`request-serialization`). As a result,
+            the callback receives a deep copy of any object stored in
+            ``cb_kwargs``, so mutating such an object in the callback does not
+            affect the original. Avoid relying on shared mutable state passed
+            through ``cb_kwargs`` in that case.
+
+    .. attribute:: Request.meta
+       :value: {}
+
+        A dictionary of arbitrary metadata for the request.
+
+        You may extend request metadata as you see fit.
+
+        Request metadata can also be accessed through the
+        :attr:`~scrapy.http.Response.meta` attribute of a response.
+
+        To pass your own data from one spider callback to another, use
+        :attr:`cb_kwargs` instead, see :ref:`callback-data`. However, request
+        metadata may be the right choice in certain scenarios, such as to
+        maintain some debugging data across all follow-up requests (e.g. the
+        source URL). To copy some metadata keys automatically into follow-up
+        requests, consider using the :setting:`STICKY_META_KEYS` setting.
+
+        A common use of request metadata is to define request-specific
+        parameters for Scrapy components (extensions, middlewares, etc.). For
+        example, if you set :reqmeta:`dont_retry` to ``True``,
+        :class:`~scrapy.downloadermiddlewares.retry.RetryMiddleware` will never
+        retry that request, even if it fails. See :ref:`topics-request-meta`.
+
+        You may also use request metadata in your custom Scrapy components, for
+        example, to keep request state information relevant to your component.
+        For example,
+        :class:`~scrapy.downloadermiddlewares.retry.RetryMiddleware` uses the
+        :reqmeta:`retry_times` metadata key to keep track of how many times a
+        request has been retried so far.
+
+        Copying all the metadata of a previous request into a new, follow-up
+        request in a spider callback is a bad practice, because request
+        metadata may include metadata set by Scrapy components that is not
+        meant to be copied into other requests. For example, copying the
+        :reqmeta:`retry_times` metadata key into follow-up requests can lower
+        the amount of retries allowed for those follow-up requests.
+
+        You should only copy all request metadata from one request to another
+        if the new request is meant to replace the old request, as is often the
+        case when returning a request from a :ref:`downloader middleware
+        <topics-downloader-middleware>` method.
+
+        Also mind that the :meth:`copy` and :meth:`replace` request methods
+        :doc:`shallow-copy <library/copy>` request metadata.
+
+        .. seealso:: :class:`~scrapy.spidermiddlewares.metacopy.MetaCopyDetectionMiddleware`
+            for a built-in middleware that warns about this issue at run time.
+
+    .. autoattribute:: dont_filter
+
+    .. autoattribute:: id
+
+    .. autoattribute:: parent_id
+
+    .. autoattribute:: Request.attributes
+
+    .. automethod:: __await__
+
     .. method:: Request.copy()
 
        Return a new Request which is a copy of this Request. See also:
-       :ref:`topics-request-response-ref-request-callback-arguments`.
+       :ref:`callback-data`.
 
-    .. method:: Request.replace([url, method, headers, body, cookies, meta, flags, encoding, priority, dont_filter, callback, errback, cb_kwargs])
-
-       Return a Request object with the same members, except for those members
-       given new values by whichever keyword arguments are specified. The
-       :attr:`Request.cb_kwargs` and :attr:`Request.meta` attributes are shallow
-       copied by default (unless new values are given as arguments). See also
-       :ref:`topics-request-response-ref-request-callback-arguments`.
+    .. automethod:: replace
 
     .. automethod:: from_curl
 
+    .. automethod:: to_curl
+
+    .. automethod:: to_dict
+
+
+.. _form:
+
+Creating requests that submit HTML forms
+----------------------------------------
+
+Use :doc:`form2request <form2request:index>` to build request data from an HTML
+``<form>`` element and convert it to a :class:`~scrapy.Request`.
+
+Install it with pip:
+
+.. code-block:: bash
+
+    pip install form2request
+
+Select the desired form with CSS or XPath, then build and convert request
+data:
+
+.. code-block:: python
+
+    from form2request import form2request
+
+
+    def parse(self, response):
+        form = response.css("form#search")
+        request_data = form2request(form, data={"q": "scrapy"})
+        yield request_data.to_scrapy(callback=self.parse_results)
+
+Use ``data`` to override field values. To drop a field from the resulting
+request, set its value to ``None``.
+
+By default, form2request simulates clicking the first submit button. To submit
+without clicking any button, pass ``click=False``. To click a specific submit
+button, pass its element:
+
+.. code-block:: python
+
+    def parse(self, response):
+        form = response.css("form#checkout")
+        submit = form.css('button[name="pay"]')
+        request_data = form2request(form, click=submit)
+
+.. _topics-request-response-ref-request-userlogin:
+
+Using form2request to simulate a user login
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+It is usual for web sites to provide pre-populated form fields through ``<input
+type="hidden">`` elements, such as session related data or authentication
+tokens (for login pages). Build the request from the form and only override the
+credentials:
+
+.. code-block:: python
+
+    import scrapy
+    from form2request import form2request
+
+
+    class LoginSpider(scrapy.Spider):
+        name = "example.com"
+        start_urls = ["http://www.example.com/users/login.php"]
+
+        def parse(self, response):
+            form = response.css("form")
+            request_data = form2request(
+                form,
+                data={"username": "john", "password": "secret"},
+            )
+            yield request_data.to_scrapy(callback=self.after_login)
+
+        def after_login(self, response): ...
+
+
+Other functions related to requests
+-----------------------------------
+
+.. autofunction:: scrapy.http.request.NO_CALLBACK
+
+.. autofunction:: scrapy.utils.request.request_from_dict
+
+.. autofunction:: scrapy.utils.httpobj.urlparse_cached
+
+
+.. _request-fingerprints:
+
+Request fingerprints
+--------------------
+
+There are some aspects of scraping, such as filtering out duplicate requests
+(see :setting:`DUPEFILTER_CLASS`) or caching responses (see
+:setting:`HTTPCACHE_POLICY`), where you need the ability to generate a short,
+unique identifier from a :class:`~scrapy.Request` object: a request
+fingerprint.
+
+You often do not need to worry about request fingerprints, the default request
+fingerprinter works for most projects.
+
+However, there is no universal way to generate a unique identifier from a
+request, because different situations require comparing requests differently.
+For example, sometimes you may need to compare URLs case-insensitively, include
+URL fragments, exclude certain URL query parameters, include some or all
+headers, etc.
+
+To change how request fingerprints are built for your requests, use the
+:setting:`REQUEST_FINGERPRINTER_CLASS` setting.
+
+.. setting:: REQUEST_FINGERPRINTER_CLASS
+
+REQUEST_FINGERPRINTER_CLASS
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Default: :class:`scrapy.utils.request.RequestFingerprinter`
+
+A :ref:`request fingerprinter class <custom-request-fingerprinter>` or its
+import path.
+
+.. autoclass:: scrapy.utils.request.RequestFingerprinter
+
+.. _custom-request-fingerprinter:
+
+Writing your own request fingerprinter
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A request fingerprinter is a :ref:`component <topics-components>` that must
+implement the following method:
+
+.. currentmodule:: None
+
+.. method:: fingerprint(self, request: scrapy.Request)
+
+   Return a :class:`bytes` object that uniquely identifies *request*.
+
+   See also :ref:`request-fingerprint-restrictions`.
+
+.. currentmodule:: scrapy.http
+
+The :meth:`fingerprint` method of the default request fingerprinter,
+:class:`scrapy.utils.request.RequestFingerprinter`, uses
+:func:`scrapy.utils.request.fingerprint` with its default parameters. For some
+common use cases you can use :func:`scrapy.utils.request.fingerprint` as well
+in your :meth:`fingerprint` method implementation:
+
+.. autofunction:: scrapy.utils.request.fingerprint
+
+By default, request fingerprinting canonicalizes the request URL. If
+:reqmeta:`verbatim_url` is set to ``True``, fingerprinting does not
+canonicalize the URL, and the ``keep_fragments`` parameter is ignored (it is
+effectively true).
+
+For example, to take the value of a request header named ``X-ID`` into
+account:
+
+.. code-block:: python
+
+    # my_project/settings.py
+    REQUEST_FINGERPRINTER_CLASS = "my_project.utils.RequestFingerprinter"
+
+    # my_project/utils.py
+    from scrapy.utils.request import fingerprint
+
+
+    class RequestFingerprinter:
+        def fingerprint(self, request):
+            return fingerprint(request, include_headers=["X-ID"])
+
+To deduplicate repeated query string parameters, such as those some sites
+add on every redirect and can otherwise cause redirect loops, build the
+deduplicated URL yourself and delegate the rest to
+:func:`scrapy.utils.request.fingerprint`:
+
+.. code-block:: python
+
+    # my_project/settings.py
+    REQUEST_FINGERPRINTER_CLASS = "my_project.utils.RequestFingerprinter"
+
+    # my_project/utils.py
+    from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+    from weakref import WeakKeyDictionary
+
+    from scrapy.utils.request import fingerprint
+
+
+    class RequestFingerprinter:
+        cache = WeakKeyDictionary()
+
+        def fingerprint(self, request):
+            if request not in self.cache:
+                parts = urlsplit(request.url)
+                query = urlencode(list(set(parse_qsl(parts.query))))
+                deduped_url = urlunsplit(parts._replace(query=query))
+                deduped_request = request.replace(url=deduped_url)
+                self.cache[request] = fingerprint(deduped_request)
+            return self.cache[request]
+
+You can also write your own fingerprinting logic from scratch.
+
+However, if you do not use :func:`scrapy.utils.request.fingerprint`, make sure
+you use :class:`~weakref.WeakKeyDictionary` to cache request fingerprints:
+
+-   Caching saves CPU by ensuring that fingerprints are calculated only once
+    per request, and not once per Scrapy component that needs the fingerprint
+    of a request.
+
+-   Using :class:`~weakref.WeakKeyDictionary` saves memory by ensuring that
+    request objects do not stay in memory forever just because you have
+    references to them in your cache dictionary.
+
+For example, to take into account only the URL of a request, without any prior
+URL canonicalization or taking the request method or body into account:
+
+.. code-block:: python
+
+    from hashlib import sha1
+    from weakref import WeakKeyDictionary
+
+
+    class RequestFingerprinter:
+        cache = WeakKeyDictionary()
+
+        def fingerprint(self, request):
+            if request not in self.cache:
+                fp = sha1()
+                fp.update(request.url.encode())
+                self.cache[request] = fp.digest()
+            return self.cache[request]
+
+If you need to be able to override the request fingerprinting for arbitrary
+requests from your spider callbacks, you may implement a request fingerprinter
+that reads fingerprints from :attr:`request.meta <scrapy.Request.meta>`
+when available, and then falls back to
+:func:`scrapy.utils.request.fingerprint`. For example:
+
+.. code-block:: python
+
+    from scrapy.utils.request import fingerprint
+
+
+    class RequestFingerprinter:
+        def fingerprint(self, request):
+            if "fingerprint" in request.meta:
+                return request.meta["fingerprint"]
+            return fingerprint(request)
+
+If you need to reproduce the same fingerprinting algorithm as Scrapy 2.6, use
+the following request fingerprinter:
+
+.. code-block:: python
+
+    from hashlib import sha1
+    from weakref import WeakKeyDictionary
+
+    from w3lib.url import canonicalize_url
+
+
+    class RequestFingerprinter:
+        cache = WeakKeyDictionary()
+
+        def fingerprint(self, request):
+            if request not in self.cache:
+                fp = sha1()
+                fp.update(request.method.encode())
+                fp.update(canonicalize_url(request.url).encode())
+                fp.update(request.body or b"")
+                self.cache[request] = fp.digest()
+            return self.cache[request]
+
+
+.. _request-fingerprint-restrictions:
+
+Request fingerprint restrictions
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Scrapy components that use request fingerprints may impose additional
+restrictions on the format of the fingerprints that your :ref:`request
+fingerprinter <custom-request-fingerprinter>` generates.
+
+The following built-in Scrapy components have such restrictions:
+
+-   :class:`scrapy.extensions.httpcache.FilesystemCacheStorage` (default
+    value of :setting:`HTTPCACHE_STORAGE`)
+
+    Request fingerprints must be at least 1 byte long.
+
+    Path and filename length limits of the file system of
+    :setting:`HTTPCACHE_DIR` also apply. Inside :setting:`HTTPCACHE_DIR`,
+    the following directory structure is created:
+
+    -   the partition that :setting:`HTTPCACHE_SCOPE` selects, i.e.
+        :attr:`.Spider.name` or the request host, and no folder at all with
+        ``'none'``
+
+        -   first byte of a request fingerprint as hexadecimal
+
+            -   fingerprint as hexadecimal
+
+                -   filenames up to 16 characters long
+
+    For example, if a request fingerprint is made of 20 bytes (default),
+    :setting:`HTTPCACHE_DIR` is ``'/home/user/project/.scrapy/httpcache'``,
+    and the name of your spider is ``'my_spider'`` your file system must
+    support a file path like::
+
+        /home/user/project/.scrapy/httpcache/my_spider/01/0123456789abcdef0123456789abcdef01234567/response_headers
+
+-   :class:`scrapy.extensions.httpcache.DbmCacheStorage`
+
+    The underlying DBM implementation must support keys as long as twice
+    the number of bytes of a request fingerprint, plus 5. For example,
+    if a request fingerprint is made of 20 bytes (default),
+    45-character-long keys must be supported.
+
+
+.. _callbacks:
+
+Callbacks
+=========
+
+A callback is a function that Scrapy calls with the :class:`Response` of a
+:class:`~scrapy.Request` once that request has been downloaded, so that you can
+extract data from that response and generate additional requests to continue
+the crawl:
+
+.. code-block:: python
+
+    from scrapy import Request, Spider
+
+
+    class BookSpider(Spider):
+        name = "books"
+
+        async def start(self):
+            yield Request("https://books.toscrape.com/", callback=self.parse_home)
+
+        def parse_home(self, response):
+            for url in response.css("h3 a::attr(href)").getall():
+                yield Request(response.urljoin(url), callback=self.parse_book)
+
+        def parse_book(self, response):
+            yield {"title": response.css("h1::text").get()}
+
+Requests may also define an :ref:`errback <errbacks>`, which Scrapy calls
+instead of the callback when an exception is raised while processing the
+request or its response, e.g. a connection error or, by default, a non-2xx
+response.
+
+
+.. _callback-assignment:
+
+Assigning a callback to a request
+---------------------------------
+
+To assign a callback to a request, use the ``callback`` parameter of
+:class:`~scrapy.Request`, which sets the :attr:`.Request.callback` attribute:
+
+.. code-block:: python
+
+    from scrapy import Request
+
+
+    def parse_home(response): ...
+
+
+    request = Request("https://books.toscrape.com/", callback=parse_home)
+
+Requests with no callback, i.e. with :attr:`~scrapy.Request.callback` set to
+``None``, are handled by the :meth:`~scrapy.Spider.parse` method of the spider:
+
+.. code-block:: python
+
+    request = Request("https://books.toscrape.com/")  # Handled by parse()
+
+If a request is never meant to reach a spider callback, e.g. because a
+:ref:`component <topics-components>` sends it and handles its response itself,
+assign the special :func:`~scrapy.http.request.NO_CALLBACK` value to it
+instead, so that :ref:`downloader middlewares <topics-downloader-middleware>`
+can tell such requests apart.
+
+While :attr:`~scrapy.Request.callback` only accepts callables, some spider
+classes let you also define a callback by name: both :attr:`CrawlSpider.rules
+<scrapy.spiders.CrawlSpider.rules>` and :attr:`SitemapSpider.sitemap_rules
+<scrapy.spiders.SitemapSpider.sitemap_rules>` accept the name of a spider
+method as a string.
+
+
+.. _writing-callbacks:
+
+Writing a callback
+------------------
+
+Any callable can be a callback, as long as it takes the response as its first
+positional parameter, and any :ref:`additional callback data <callback-data>`
+as keyword parameters. Spider methods are the most common choice, but plain
+functions, lambda expressions and other callable objects work as well.
+
+.. note:: If you enable :ref:`job persistence <topics-jobs>` through the
+    :setting:`JOBDIR` setting, callbacks must be methods of the running spider.
+    Requests with any other callback cannot be serialized, so they are kept in
+    memory only and lost when you pause the crawl. See
+    :ref:`request-serialization`.
+
+A callback can be:
+
+-   A regular function:
+
+    .. code-block:: python
+
+        def parse(self, response):
+            return {"url": response.url}
+
+-   A generator function:
+
+    .. code-block:: python
+
+        def parse(self, response):
+            yield {"url": response.url}
+
+-   A coroutine function, i.e. defined with ``async def``:
+
+    .. code-block:: python
+
+        async def parse(self, response):
+            return {"url": response.url}
+
+-   An asynchronous generator function:
+
+    .. code-block:: python
+
+        async def parse(self, response):
+            yield {"url": response.url}
+
+The last two allow using ``await``, ``async for`` and ``async with`` in your
+callback. See :ref:`topics-coroutines`.
+
+
+.. _callback-output:
+
+Callback output
+---------------
+
+A callback may return or yield any of the following:
+
+-   ``None``, which does nothing.
+
+    Callbacks that produce no output at all, e.g. callbacks that only log
+    information about the response, are perfectly valid. ``None`` values within
+    an iterable of callback output are ignored as well.
+
+-   A :class:`~scrapy.Request` object, which Scrapy schedules, downloads and
+    eventually sends to its own callback.
+
+-   An :ref:`item object <topics-items>`, which Scrapy sends to the
+    :ref:`item pipelines <topics-item-pipeline>`.
+
+    Any object that is neither ``None`` nor a :class:`~scrapy.Request` object
+    is treated as an item.
+
+-   An iterable of any of the values above, e.g. a list or, more commonly, a
+    generator.
+
+    :term:`Asynchronous iterables <asynchronous iterable>`, e.g. an
+    :term:`asynchronous generator`, are also supported.
+
+.. note:: When a callback *returns* an object, Scrapy iterates that object if
+    it supports iteration, except for :class:`dict`, :class:`~scrapy.Item`,
+    :class:`str` and :class:`bytes` objects, which are always handled as single
+    items.
+
+.. note:: In a generator callback, a ``return`` statement with a value does not
+    produce any output, since such a value is not part of what the generator
+    yields. Scrapy logs a warning when it detects such a callback, see
+    :setting:`WARN_ON_GENERATOR_RETURN_VALUE`.
+
+Before Scrapy acts on the output of a callback, that output goes through the
+:meth:`~scrapy.spidermiddlewares.SpiderMiddleware.process_spider_output` method
+of your :ref:`spider middlewares <topics-spider-middleware>`, which may modify
+it or drop part of it.
+
+If a callback raises an exception, the :attr:`~scrapy.Request.errback` of the
+request is *not* called. The exception goes through the
+:meth:`~scrapy.spidermiddlewares.SpiderMiddleware.process_spider_exception`
+method of your spider middlewares instead and, unless one of them handles it,
+Scrapy logs it and sends the :signal:`spider_error` signal.
+
+
+.. _callback-data:
 .. _topics-request-response-ref-request-callback-arguments:
 
 Passing additional data to callback functions
 ---------------------------------------------
 
-The callback of a request is a function that will be called when the response
-of that request is downloaded. The callback function will be called with the
-downloaded :class:`Response` object as its first argument.
+In some cases you may be interested in passing data to a callback in addition
+to the response, e.g. data extracted from the response that triggered the
+request. The following example shows how to achieve this by using the
+:attr:`.Request.cb_kwargs` attribute:
 
-Example::
+.. code-block:: python
 
-    def parse_page1(self, response):
-        return scrapy.Request("http://www.example.com/some_page.html",
-                              callback=self.parse_page2)
+    from scrapy import Request
 
-    def parse_page2(self, response):
-        # this would log http://www.example.com/some_page.html
-        self.logger.info("Visited %s", response.url)
-
-In some cases you may be interested in passing arguments to those callback
-functions so you can receive the arguments later, in the second callback.
-The following example shows how to achieve this by using the
-:attr:`Request.cb_kwargs` attribute:
-
-::
 
     def parse(self, response):
-        request = scrapy.Request('http://www.example.com/index.html',
-                                 callback=self.parse_page2,
-                                 cb_kwargs=dict(main_url=response.url))
-        request.cb_kwargs['foo'] = 'bar'  # add more arguments for the callback
+        request = Request(
+            "http://www.example.com/index.html",
+            callback=self.parse_page2,
+            cb_kwargs=dict(main_url=response.url),
+        )
+        request.cb_kwargs["foo"] = "bar"  # add more arguments for the callback
         yield request
+
 
     def parse_page2(self, response, main_url, foo):
         yield dict(
@@ -260,50 +678,62 @@ The following example shows how to achieve this by using the
             foo=foo,
         )
 
-.. caution:: :attr:`Request.cb_kwargs` was introduced in version ``1.7``.
-   Prior to that, using :attr:`Request.meta` was recommended for passing
-   information around callbacks. After ``1.7``, :attr:`Request.cb_kwargs`
-   became the preferred way for handling user information, leaving :attr:`Request.meta`
-   for communication with components like middlewares and extensions.
+:attr:`.Request.cb_kwargs` is the recommended way to pass your own data to a
+callback. Use :attr:`.Request.meta` only for data aimed at :ref:`components
+<topics-components>`, such as middlewares and extensions.
 
+.. _errbacks:
 .. _topics-request-response-ref-errbacks:
 
-Using errbacks to catch exceptions in request processing
---------------------------------------------------------
+Errbacks
+========
 
 The errback of a request is a function that will be called when an exception
-is raise while processing it.
+is raised while processing it.
 
 It receives a :exc:`~twisted.python.failure.Failure` as first parameter and can
 be used to track connection establishment timeouts, DNS errors etc.
 
+Scrapy sets the ``request`` attribute of that
+:exc:`~twisted.python.failure.Failure` object to the :class:`~scrapy.Request`
+object being processed.
+
+If an errback raises an exception, Scrapy logs it and sends the
+:signal:`spider_error` signal, unless the exception is the one that the errback
+received, which Scrapy logs as a download error instead.
+
 Here's an example spider logging all errors and catching some specific
-errors if needed::
+errors if needed:
 
-    import scrapy
+.. code-block:: python
 
+    from scrapy import Request, Spider
     from scrapy.spidermiddlewares.httperror import HttpError
     from twisted.internet.error import DNSLookupError
     from twisted.internet.error import TimeoutError, TCPTimedOutError
 
-    class ErrbackSpider(scrapy.Spider):
+
+    class ErrbackSpider(Spider):
         name = "errback_example"
         start_urls = [
-            "http://www.httpbin.org/",              # HTTP 200 expected
-            "http://www.httpbin.org/status/404",    # Not found error
-            "http://www.httpbin.org/status/500",    # server issue
-            "http://www.httpbin.org:12345/",        # non-responding host, timeout expected
-            "http://www.httphttpbinbin.org/",       # DNS error expected
+            "http://www.httpbin.org/",  # HTTP 200 expected
+            "http://www.httpbin.org/status/404",  # Not found error
+            "http://www.httpbin.org/status/500",  # server issue
+            "http://www.httpbin.org:12345/",  # non-responding host, timeout expected
+            "https://example.invalid/",  # DNS error expected
         ]
 
-        def start_requests(self):
+        async def start(self):
             for u in self.start_urls:
-                yield scrapy.Request(u, callback=self.parse_httpbin,
-                                        errback=self.errback_httpbin,
-                                        dont_filter=True)
+                yield Request(
+                    u,
+                    callback=self.parse_httpbin,
+                    errback=self.errback_httpbin,
+                    dont_filter=True,
+                )
 
         def parse_httpbin(self, response):
-            self.logger.info('Got successful response from {}'.format(response.url))
+            self.logger.info(f"Got successful response from {response.url}")
             # do something useful here...
 
         def errback_httpbin(self, failure):
@@ -317,16 +747,17 @@ errors if needed::
                 # these exceptions come from HttpError spider middleware
                 # you can get the non-200 response
                 response = failure.value.response
-                self.logger.error('HttpError on %s', response.url)
+                self.logger.error("HttpError on %s", response.url)
 
             elif failure.check(DNSLookupError):
                 # this is the original request
                 request = failure.request
-                self.logger.error('DNSLookupError on %s', request.url)
+                self.logger.error("DNSLookupError on %s", request.url)
 
             elif failure.check(TimeoutError, TCPTimedOutError):
                 request = failure.request
-                self.logger.error('TimeoutError on %s', request.url)
+                self.logger.error("TimeoutError on %s", request.url)
+
 
 .. _errback-cb_kwargs:
 
@@ -336,60 +767,214 @@ Accessing additional data in errback functions
 In case of a failure to process the request, you may be interested in
 accessing arguments to the callback functions so you can process further
 based on the arguments in the errback. The following example shows how to
-achieve this by using ``Failure.request.cb_kwargs``::
+achieve this by using ``Failure.request.cb_kwargs``:
+
+.. code-block:: python
+
+    from scrapy import Request
+
 
     def parse(self, response):
-        request = scrapy.Request('http://www.example.com/index.html',
-                                 callback=self.parse_page2,
-                                 errback=self.errback_page2,
-                                 cb_kwargs=dict(main_url=response.url))
+        request = Request(
+            "http://www.example.com/index.html",
+            callback=self.parse_page2,
+            errback=self.errback_page2,
+            cb_kwargs=dict(main_url=response.url),
+        )
         yield request
+
 
     def parse_page2(self, response, main_url):
         pass
 
+
     def errback_page2(self, failure):
         yield dict(
-            main_url=failure.request.cb_kwargs['main_url'],
+            main_url=failure.request.cb_kwargs["main_url"],
         )
+
 
 .. _topics-request-meta:
 
 Request.meta special keys
 =========================
 
-The :attr:`Request.meta` attribute can contain any arbitrary data, but there
+The :attr:`.Request.meta` attribute can contain any arbitrary data, but there
 are some special keys recognized by Scrapy and its built-in extensions.
 
 Those are:
 
+* :reqmeta:`allow_offsite`
+* :reqmeta:`autothrottle_dont_adjust_delay`
+* :reqmeta:`bindaddress`
+* :reqmeta:`body_file`
+* :reqmeta:`cache_timestamp`
+* :reqmeta:`cookiejar`
+* :reqmeta:`delay`
+* :reqmeta:`delayed`
+* :reqmeta:`depth`
+* :reqmeta:`dont_cache`
+* :reqmeta:`dont_merge_cookies`
+* :reqmeta:`dont_obey_robotstxt`
 * :reqmeta:`dont_redirect`
 * :reqmeta:`dont_retry`
-* :reqmeta:`handle_httpstatus_list`
-* :reqmeta:`handle_httpstatus_all`
-* :reqmeta:`dont_merge_cookies`
-* :reqmeta:`cookiejar`
-* :reqmeta:`dont_cache`
-* :reqmeta:`redirect_reasons`
-* :reqmeta:`redirect_urls`
-* :reqmeta:`bindaddress`
-* :reqmeta:`dont_obey_robotstxt`
-* :reqmeta:`download_timeout`
-* :reqmeta:`download_maxsize`
-* :reqmeta:`download_latency`
 * :reqmeta:`download_fail_on_dataloss`
-* :reqmeta:`proxy`
-* ``ftp_user`` (See :setting:`FTP_USER` for more info)
-* ``ftp_password`` (See :setting:`FTP_PASSWORD` for more info)
-* :reqmeta:`referrer_policy`
+* :reqmeta:`download_latency`
+* :reqmeta:`download_maxsize`
+* :reqmeta:`download_slot`
+* :reqmeta:`download_timeout`
+* :reqmeta:`download_warnsize`
+* :reqmeta:`ftp_local_filename`
+* :reqmeta:`ftp_passive`
+* :reqmeta:`ftp_password`
+* :reqmeta:`ftp_user`
+* :reqmeta:`give_up_log_level`
+* :reqmeta:`handle_http_codes`
+* :reqmeta:`http_auth_domain`
+* :reqmeta:`http_pass`
+* :reqmeta:`http_user`
+* :reqmeta:`is_start_request`
+* :reqmeta:`link_text`
 * :reqmeta:`max_retry_times`
+* :reqmeta:`priority_adjust`
+* :reqmeta:`proxy`
+* :reqmeta:`proxy_headers`
+* :reqmeta:`redirect_http_codes`
+* :reqmeta:`redirect_reasons`
+* :reqmeta:`redirect_times`
+* :reqmeta:`redirect_ttl`
+* :reqmeta:`redirect_urls`
+* :reqmeta:`referrer_policy`
+* :reqmeta:`retry_times`
+* :reqmeta:`rule`
+* :reqmeta:`skip_dupefilter_once`
+* :reqmeta:`verbatim_url`
+
+Scrapy components also use meta keys whose name starts with an underscore, such
+as ``_auth_proxy``. Those are internal, and may change or disappear at any time.
 
 .. reqmeta:: bindaddress
 
 bindaddress
 -----------
 
-The IP of the outgoing IP address to use for the performing the request.
+The default local outgoing address for download-handler connections.
+
+This meta value can be either:
+
+- a host address as a string (e.g. ``"127.0.0.2"``), in which case the local
+  port is chosen automatically, or
+
+- a ``(host, port)`` tuple (e.g. ``("127.0.0.2", 50000)``) to bind to both a
+  specific local interface and a specific local port.
+
+For example:
+
+.. code-block:: python
+
+    Request(
+        "https://example.org",
+        meta={"bindaddress": "127.0.0.2"},
+    )
+
+.. code-block:: python
+
+    Request(
+        "https://example.org",
+        meta={"bindaddress": ("127.0.0.2", 50000)},
+    )
+
+If not set, built-in HTTP download handlers use the value of
+:setting:`DOWNLOAD_BIND_ADDRESS` as the default bind address.
+Set the :reqmeta:`bindaddress` request meta key to override it for a
+specific request.
+
+This meta key is not supported by
+:class:`~scrapy.core.downloader.handlers._httpx.HttpxDownloadHandler` and
+:class:`~scrapy.core.downloader.handlers._aiohttp.AiohttpDownloadHandler`, but
+the :setting:`DOWNLOAD_BIND_ADDRESS` setting is supported by them.
+
+.. reqmeta:: body_file
+
+body_file
+---------
+
+.. versionadded:: 2.20.0
+
+Path of a file where the response body is written as it is downloaded, or
+``True`` to write it to a new temporary file, so that responses of any size can
+be downloaded without fitting them in memory:
+
+.. code-block:: python
+
+    Request("https://example.com/big.zip", meta={"body_file": "big.zip"})
+
+The response is then a :class:`BodyFileResponse`.
+
+Each download attempt, e.g. a retry or a redirect, writes the file from the
+start. If the download fails, e.g. because the response exceeds
+:setting:`DOWNLOAD_MAXSIZE`, the file may hold part of the body, except for
+temporary files, which Scrapy deletes. Deleting temporary files of successful
+downloads is up to you.
+
+Scrapy does not ask for a compressed response, and does not decompress the file
+if the server sends one anyway, as indicated by the ``Content-Encoding``
+response header.
+:class:`~scrapy.downloadermiddlewares.httpcache.HttpCacheMiddleware` skips
+these requests.
+
+Download handlers that do not support this key, such as :ref:`some built-in
+ones <download-handlers-ref>`, make the request fail with
+:exc:`~scrapy.exceptions.NotSupported`.
+
+.. reqmeta:: delay
+
+delay
+-----
+
+.. versionadded:: 2.20.0
+
+Number of seconds to hold a request before sending it:
+
+.. code-block:: python
+
+    Request("https://example.com/slow", meta={"delay": 5.0})
+
+The delay is a minimum: once it elapses, the request competes with the other
+pending requests as usual, subject to e.g. its
+:attr:`~scrapy.Request.priority`, :setting:`CONCURRENT_REQUESTS_PER_DOMAIN` and
+:setting:`DOWNLOAD_DELAY`.
+
+Scrapy removes this key as soon as the countdown starts, so that a copy of the
+request, e.g. a retry or a redirect, is not held again, and so that setting the
+key again asks for a new delay. See also :reqmeta:`delayed`.
+
+.. reqmeta:: delayed
+
+delayed
+-------
+
+.. versionadded:: 2.20.0
+
+Delays, in seconds, that a request has been held for because of
+:reqmeta:`delay`. Read-only.
+
+.. code-block:: python
+
+    def parse(self, response):
+        delays = response.meta.get("delayed", [])
+        self.logger.info(f"Held {len(delays)} times, {sum(delays)}s in total")
+
+.. reqmeta:: download_handler
+
+download_handler
+----------------
+
+.. versionadded:: 2.20.0
+
+ID of the :ref:`download handler <topics-download-handlers>` to use for this
+request, either a name from :setting:`DOWNLOAD_HANDLERS_BY_NAME` or a URL
+scheme from :setting:`DOWNLOAD_HANDLERS`. See :ref:`download-handler-ids`.
 
 .. reqmeta:: download_timeout
 
@@ -405,9 +990,11 @@ download_latency
 ----------------
 
 The amount of time spent to fetch the response, since the request has been
-started, i.e. HTTP message sent over the network. This meta key only becomes
-available when the response has been downloaded. While most other meta keys are
-used to control Scrapy behavior, this one is supposed to be read-only.
+started, i.e. HTTP message sent over the network. It covers the time until
+Scrapy reads the response, which your own code can delay, see
+:ref:`optimize-blocking`. This meta key only becomes available when the
+response has been downloaded. While most other meta keys are used to control
+Scrapy behavior, this one is supposed to be read-only.
 
 .. reqmeta:: download_fail_on_dataloss
 
@@ -417,24 +1004,153 @@ download_fail_on_dataloss
 Whether or not to fail on broken responses. See:
 :setting:`DOWNLOAD_FAIL_ON_DATALOSS`.
 
+.. reqmeta:: ftp_local_filename
+
+ftp_local_filename
+------------------
+
+Path, as :class:`bytes`, of the file where to write the response body of an
+``ftp://`` request. If set, :attr:`Response.body <scrapy.http.Response.body>`
+holds this path instead of the file contents.
+
+.. reqmeta:: give_up_log_level
+
+give_up_log_level
+-----------------
+
+.. versionadded:: 2.17.0
+
+:ref:`Logging level <levels>` used for the message logged when a request
+exceeds its retries. See :setting:`RETRY_GIVE_UP_LOG_LEVEL` for details.
+
+.. reqmeta:: http_auth_domain
+
+http_auth_domain
+----------------
+
+.. versionadded:: 2.17.0
+
+Overrides :setting:`HTTPAUTH_DOMAIN` for this request.
+
+If this key is not set, :reqmeta:`http_user` and :reqmeta:`http_pass` are only
+sent to the origin (scheme, host and port) of the request where they were first
+used, e.g. they are not sent after a cross-origin redirect.
+
+.. reqmeta:: http_pass
+
+http_pass
+---------
+
+.. versionadded:: 2.17.0
+
+Overrides :setting:`HTTPAUTH_PASS` for this request.
+
+.. reqmeta:: http_user
+
+http_user
+---------
+
+.. versionadded:: 2.17.0
+
+Overrides :setting:`HTTPAUTH_USER` for this request.
+
+.. reqmeta:: is_robotstxt_request
+
+is_robotstxt_request
+--------------------
+
+.. versionadded:: 2.20.0
+
+``True`` on the ``robots.txt`` requests that
+:class:`~scrapy.downloadermiddlewares.robotstxt.RobotsTxtMiddleware` sends, so
+that :ref:`downloader middlewares <topics-downloader-middleware>` can tell them
+apart from other requests.
+
 .. reqmeta:: max_retry_times
 
 max_retry_times
 ---------------
 
-The meta key is used set retry times per request. When initialized, the
+The meta key is used set retry times per request. When set, the
 :reqmeta:`max_retry_times` meta key takes higher precedence over the
 :setting:`RETRY_TIMES` setting.
 
+.. reqmeta:: proxy_headers
+
+proxy_headers
+-------------
+
+.. versionadded:: 2.20.0
+
+Headers for the proxy set in the :reqmeta:`proxy` metadata key, as a mapping,
+e.g. ``{"X-Proxy-Country": "us"}``.
+
+.. code-block:: python
+
+    Request(
+        "https://example.com",
+        meta={
+            "proxy": "http://proxy.example:8080",
+            "proxy_headers": {"X-Proxy-Country": "us"},
+        },
+    )
+
+For HTTPS URLs these headers are sent in the ``CONNECT`` request that opens the
+tunnel through the proxy, which the target server cannot see. For other URLs
+there is no tunnel, so they are sent among the request headers, and it is up to
+the proxy to consume them instead of passing them on to the target server.
+
+.. note::
+
+    Handling of this metadata key needs to be implemented inside the
+    :ref:`download handler <topics-download-handlers>`, so it's not guaranteed
+    to be supported by all 3rd-party handlers. Among the built-in handlers,
+    :class:`~scrapy.core.downloader.handlers.http11.HTTP11DownloadHandler`,
+    :class:`~scrapy.core.downloader.handlers._httpx.HttpxDownloadHandler` and
+    :class:`~scrapy.core.downloader.handlers._aiohttp.AiohttpDownloadHandler`
+    support it for HTTP and HTTPS proxies.
+
+.. reqmeta:: skip_dupefilter_once
+
+skip_dupefilter_once
+--------------------
+
+.. versionadded:: 2.20.0
+
+Set this key to ``True`` to skip :setting:`duplicate filtering
+<DUPEFILTER_CLASS>` for this request. The :ref:`scheduler <topics-scheduler>`
+removes this key, so requests derived from this request, e.g. redirects, are
+filtered as usual.
+
+:func:`~scrapy.downloadermiddlewares.retry.get_retry_request` sets this key.
+
+.. reqmeta:: verbatim_url
+
+verbatim_url
+------------
+
+.. versionadded:: 2.17.0
+
+Set this key to ``True`` to keep the request URL as passed to
+:class:`~scrapy.Request`, without URL percent-encoding.
+
+When this key is enabled, :func:`~scrapy.utils.request.fingerprint` does not
+canonicalize the request URL, so requests whose URLs differ only in
+characters that would otherwise be canonicalized get different fingerprints.
+
+In this mode, the ``keep_fragments`` parameter is ignored, and it is
+effectively true.
 
 .. _topics-stop-response-download:
 
 Stopping the download of a Response
 ===================================
 
-Raising a :exc:`~scrapy.exceptions.StopDownload` exception from a
-:class:`~scrapy.signals.bytes_received` signal handler will stop the
-download of a given response. See the following example::
+Raising a :exc:`~scrapy.exceptions.StopDownload` exception from a handler for the
+:class:`~scrapy.signals.bytes_received` or :class:`~scrapy.signals.headers_received`
+signals will stop the download of a given response. See the following example:
+
+.. code-block:: python
 
     import scrapy
 
@@ -446,7 +1162,9 @@ download of a given response. See the following example::
         @classmethod
         def from_crawler(cls, crawler):
             spider = super().from_crawler(crawler)
-            crawler.signals.connect(spider.on_bytes_received, signal=scrapy.signals.bytes_received)
+            crawler.signals.connect(
+                spider.on_bytes_received, signal=scrapy.signals.bytes_received
+            )
             return spider
 
         def parse(self, response):
@@ -476,165 +1194,33 @@ call their callback instead, like in this example, pass ``fail=False`` to the
 Request subclasses
 ==================
 
-Here is the list of built-in :class:`Request` subclasses. You can also subclass
+Here is the list of built-in :class:`~scrapy.Request` subclasses. You can also subclass
 it to implement your own custom functionality.
 
-FormRequest objects
--------------------
+FormRequest
+-----------
 
-The FormRequest class extends the base :class:`Request` with functionality for
-dealing with HTML forms. It uses `lxml.html forms`_  to pre-populate form
-fields with form data from :class:`Response` objects.
-
-.. _lxml.html forms: https://lxml.de/lxmlhtml.html#forms
-
-.. class:: FormRequest(url, [formdata, ...])
-
-    The :class:`FormRequest` class adds a new keyword parameter to the ``__init__`` method. The
-    remaining arguments are the same as for the :class:`Request` class and are
-    not documented here.
-
-    :param formdata: is a dictionary (or iterable of (key, value) tuples)
-       containing HTML Form data which will be url-encoded and assigned to the
-       body of the request.
-    :type formdata: dict or collections.abc.Iterable
-
-    The :class:`FormRequest` objects support the following class method in
-    addition to the standard :class:`Request` methods:
-
-    .. classmethod:: FormRequest.from_response(response, [formname=None, formid=None, formnumber=0, formdata=None, formxpath=None, formcss=None, clickdata=None, dont_click=False, ...])
-
-       Returns a new :class:`FormRequest` object with its form field values
-       pre-populated with those found in the HTML ``<form>`` element contained
-       in the given response. For an example see
-       :ref:`topics-request-response-ref-request-userlogin`.
-
-       The policy is to automatically simulate a click, by default, on any form
-       control that looks clickable, like a ``<input type="submit">``.  Even
-       though this is quite convenient, and often the desired behaviour,
-       sometimes it can cause problems which could be hard to debug. For
-       example, when working with forms that are filled and/or submitted using
-       javascript, the default :meth:`from_response` behaviour may not be the
-       most appropriate. To disable this behaviour you can set the
-       ``dont_click`` argument to ``True``. Also, if you want to change the
-       control clicked (instead of disabling it) you can also use the
-       ``clickdata`` argument.
-
-       .. caution:: Using this method with select elements which have leading
-          or trailing whitespace in the option values will not work due to a
-          `bug in lxml`_, which should be fixed in lxml 3.8 and above.
-
-       :param response: the response containing a HTML form which will be used
-          to pre-populate the form fields
-       :type response: :class:`Response` object
-
-       :param formname: if given, the form with name attribute set to this value will be used.
-       :type formname: str
-
-       :param formid: if given, the form with id attribute set to this value will be used.
-       :type formid: str
-
-       :param formxpath: if given, the first form that matches the xpath will be used.
-       :type formxpath: str
-
-       :param formcss: if given, the first form that matches the css selector will be used.
-       :type formcss: str
-
-       :param formnumber: the number of form to use, when the response contains
-          multiple forms. The first one (and also the default) is ``0``.
-       :type formnumber: int
-
-       :param formdata: fields to override in the form data. If a field was
-          already present in the response ``<form>`` element, its value is
-          overridden by the one passed in this parameter. If a value passed in
-          this parameter is ``None``, the field will not be included in the
-          request, even if it was present in the response ``<form>`` element.
-       :type formdata: dict
-
-       :param clickdata: attributes to lookup the control clicked. If it's not
-         given, the form data will be submitted simulating a click on the
-         first clickable element. In addition to html attributes, the control
-         can be identified by its zero-based index relative to other
-         submittable inputs inside the form, via the ``nr`` attribute.
-       :type clickdata: dict
-
-       :param dont_click: If True, the form data will be submitted without
-         clicking in any element.
-       :type dont_click: bool
-
-       The other parameters of this class method are passed directly to the
-       :class:`FormRequest` ``__init__`` method.
-
-Request usage examples
-----------------------
-
-Using FormRequest to send data via HTTP POST
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-If you want to simulate a HTML Form POST in your spider and send a couple of
-key-value fields, you can return a :class:`FormRequest` object (from your
-spider) like this::
-
-   return [FormRequest(url="http://www.example.com/post/action",
-                       formdata={'name': 'John Doe', 'age': '27'},
-                       callback=self.after_post)]
-
-.. _topics-request-response-ref-request-userlogin:
-
-Using FormRequest.from_response() to simulate a user login
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-It is usual for web sites to provide pre-populated form fields through ``<input
-type="hidden">`` elements, such as session related data or authentication
-tokens (for login pages). When scraping, you'll want these fields to be
-automatically pre-populated and only override a couple of them, such as the
-user name and password. You can use the :meth:`FormRequest.from_response`
-method for this job. Here's an example spider which uses it::
-
-
-    import scrapy
-
-    def authentication_failed(response):
-        # TODO: Check the contents of the response and return True if it failed
-        # or False if it succeeded.
-        pass
-
-    class LoginSpider(scrapy.Spider):
-        name = 'example.com'
-        start_urls = ['http://www.example.com/users/login.php']
-
-        def parse(self, response):
-            return scrapy.FormRequest.from_response(
-                response,
-                formdata={'username': 'john', 'password': 'secret'},
-                callback=self.after_login
-            )
-
-        def after_login(self, response):
-            if authentication_failed(response):
-                self.logger.error("Login failed")
-                return
-
-            # continue scraping with authenticated session...
+.. autoclass:: scrapy.FormRequest
 
 JsonRequest
 -----------
 
-The JsonRequest class extends the base :class:`Request` class with functionality for
+The JsonRequest class extends the base :class:`~scrapy.Request` class with functionality for
 dealing with JSON requests.
 
 .. class:: JsonRequest(url, [... data, dumps_kwargs])
 
-   The :class:`JsonRequest` class adds two new keyword parameters to the ``__init__`` method. The
-   remaining arguments are the same as for the :class:`Request` class and are
+   The :class:`JsonRequest` class adds two new keyword parameters to the ``__init__()`` method. The
+   remaining arguments are the same as for the :class:`~scrapy.Request` class and are
    not documented here.
 
    Using the :class:`JsonRequest` will set the ``Content-Type`` header to ``application/json``
    and ``Accept`` header to ``application/json, text/javascript, */*; q=0.01``
 
    :param data: is any JSON serializable object that needs to be JSON encoded and assigned to body.
-      if :attr:`Request.body` argument is provided this parameter will be ignored.
-      if :attr:`Request.body` argument is not provided and data argument is provided :attr:`Request.method` will be
+      If the :attr:`~scrapy.Request.body` argument is provided this parameter will be ignored.
+      If the :attr:`~scrapy.Request.body` argument is not provided and the
+      ``data`` argument is provided the :attr:`~scrapy.Request.method` will be
       set to ``'POST'`` automatically.
    :type data: object
 
@@ -642,25 +1228,27 @@ dealing with JSON requests.
        data into JSON format.
    :type dumps_kwargs: dict
 
+   .. autoattribute:: JsonRequest.attributes
+
 JsonRequest usage example
 -------------------------
 
-Sending a JSON POST request with a JSON payload::
+Sending a JSON POST request with a JSON payload:
+
+.. skip: next
+.. code-block:: python
 
    data = {
-       'name1': 'value1',
-       'name2': 'value2',
+       "name1": "value1",
+       "name2": "value2",
    }
-   yield JsonRequest(url='http://www.example.com/post/action', data=data)
+   yield JsonRequest(url="http://www.example.com/post/action", data=data)
 
 
 Response objects
 ================
 
 .. autoclass:: Response
-
-    A :class:`Response` object represents an HTTP response, which is usually
-    downloaded (by the Downloader) and fed to the Spiders for processing.
 
     :param url: the URL of this response
     :type url: str
@@ -684,17 +1272,18 @@ Response objects
     :type flags: list
 
     :param request: the initial value of the :attr:`Response.request` attribute.
-        This represents the :class:`Request` that generated this response.
-    :type request: scrapy.http.Request
+        This represents the :class:`~scrapy.Request` that generated this response.
+    :type request: scrapy.Request
 
     :param certificate: an object representing the server's SSL certificate.
-    :type certificate: twisted.internet.ssl.Certificate
+    :type certificate: typing.Any
 
     :param ip_address: The IP address of the server from which the Response originated.
     :type ip_address: :class:`ipaddress.IPv4Address` or :class:`ipaddress.IPv6Address`
 
-    .. versionadded:: 2.1.0
-       The ``ip_address`` parameter.
+    :param protocol: The protocol that was used to download the response.
+        For instance: "HTTP/1.0", "HTTP/1.1", "h2"
+    :type protocol: :class:`str`
 
     .. attribute:: Response.url
 
@@ -710,13 +1299,18 @@ Response objects
 
     .. attribute:: Response.headers
 
-        A dictionary-like object which contains the response headers. Values can
-        be accessed using :meth:`get` to return the first header value with the
-        specified name or :meth:`getlist` to return all header values with the
-        specified name. For example, this call will give you all cookies in the
-        headers::
+        A dictionary-like (:class:`scrapy.http.headers.Headers`) object which contains
+        the response headers. Values can be accessed using
+        :meth:`~scrapy.http.headers.Headers.get` to return the last header value with
+        the specified name or :meth:`~scrapy.http.headers.Headers.getlist` to return
+        all header values with the specified name. For example, this call will give you
+        all cookies in the headers:
 
-            response.headers.getlist('Set-Cookie')
+        .. skip: next
+
+        .. code-block:: python
+
+            response.headers.getlist("Set-Cookie")
 
     .. attribute:: Response.body
 
@@ -730,14 +1324,15 @@ Response objects
 
     .. attribute:: Response.request
 
-        The :class:`Request` object that generated this response. This attribute is
+        The :class:`~scrapy.Request` object that generated this response. This attribute is
         assigned in the Scrapy engine, after the response and the request have passed
         through all :ref:`Downloader Middlewares <topics-downloader-middleware>`.
         In particular, this means that:
 
-        - HTTP redirections will cause the original request (to the URL before
-          redirection) to be assigned to the redirected response (with the final
-          URL after redirection).
+        - HTTP redirections will create a new request from the request before
+          redirection. It has the majority of the same metadata and original
+          request attributes and gets assigned to the redirected response
+          instead of the propagation of the original request.
 
         - Response.request.url doesn't always equal Response.url
 
@@ -748,58 +1343,64 @@ Response objects
 
     .. attribute:: Response.meta
 
-        A shortcut to the :attr:`Request.meta` attribute of the
+        A shortcut to the :attr:`~scrapy.Request.meta` attribute of the
         :attr:`Response.request` object (i.e. ``self.request.meta``).
 
         Unlike the :attr:`Response.request` attribute, the :attr:`Response.meta`
         attribute is propagated along redirects and retries, so you will get
-        the original :attr:`Request.meta` sent from your spider.
+        the original :attr:`.Request.meta` sent from your spider.
 
-        .. seealso:: :attr:`Request.meta` attribute
+        .. seealso:: :attr:`.Request.meta` attribute
 
     .. attribute:: Response.cb_kwargs
 
-        .. versionadded:: 2.0
-
-        A shortcut to the :attr:`Request.cb_kwargs` attribute of the
+        A shortcut to the :attr:`~scrapy.Request.cb_kwargs` attribute of the
         :attr:`Response.request` object (i.e. ``self.request.cb_kwargs``).
 
         Unlike the :attr:`Response.request` attribute, the
         :attr:`Response.cb_kwargs` attribute is propagated along redirects and
-        retries, so you will get the original :attr:`Request.cb_kwargs` sent
-        from your spider.
+        retries, so you will get the original :attr:`.Request.cb_kwargs` sent from your spider.
 
-        .. seealso:: :attr:`Request.cb_kwargs` attribute
+        .. seealso:: :attr:`.Request.cb_kwargs` attribute
 
     .. attribute:: Response.flags
 
         A list that contains flags for this response. Flags are labels used for
-        tagging Responses. For example: ``'cached'``, ``'redirected``', etc. And
-        they're shown on the string representation of the Response (`__str__`
+        tagging Responses. For example: ``'cached'``, ``'redirected'``', etc. And
+        they're shown on the string representation of the Response (``__str__()``
         method) which is used by the engine for logging.
 
     .. attribute:: Response.certificate
 
-        A :class:`twisted.internet.ssl.Certificate` object representing
-        the server's SSL certificate.
+        An object representing the server's SSL certificate. Its type and
+        contents depend on the download handler that produced the response.
 
         Only populated for ``https`` responses, ``None`` otherwise.
 
     .. attribute:: Response.ip_address
 
-        .. versionadded:: 2.1.0
-
         The IP address of the server from which the Response originated.
 
-        This attribute is currently only populated by the HTTP 1.1 download
-        handler, i.e. for ``http(s)`` responses. For other handlers,
+        This attribute is currently only populated by the HTTP download
+        handlers, i.e. for ``http(s)`` responses. For other handlers,
         :attr:`ip_address` is always ``None``.
+
+    .. attribute:: Response.protocol
+
+        The protocol that was used to download the response.
+        For instance: "HTTP/1.0", "HTTP/1.1"
+
+        This attribute is currently only populated by the HTTP download
+        handlers, i.e. for ``http(s)`` responses. For other handlers,
+        :attr:`protocol` is always ``None``.
+
+    .. autoattribute:: Response.attributes
 
     .. method:: Response.copy()
 
        Returns a new Response which is a copy of this Response.
 
-    .. method:: Response.replace([url, status, headers, body, request, flags, cls])
+    .. method:: Response.replace([url, status, headers, body, request, flags, certificate, ip_address, protocol, cls])
 
        Returns a Response object with the same members, except for those members
        given new values by whichever keyword arguments are specified. The
@@ -811,13 +1412,23 @@ Response objects
         a possible relative url.
 
         This is a wrapper over :func:`~urllib.parse.urljoin`, it's merely an alias for
-        making this call::
+        making this call:
+
+        .. skip: next
+
+        .. code-block:: python
 
             urllib.parse.urljoin(response.url, url)
 
     .. automethod:: Response.follow
 
     .. automethod:: Response.follow_all
+
+    .. automethod:: Response.follow_redirect
+
+    .. automethod:: Response.to_dict
+
+    .. automethod:: Response.from_dict
 
 
 .. _topics-request-response-ref-response-subclasses:
@@ -837,15 +1448,17 @@ TextResponse objects
     :class:`Response` class, which is meant to be used only for binary data,
     such as images, sounds or any media file.
 
-    :class:`TextResponse` objects support a new ``__init__`` method argument, in
+    :class:`TextResponse` objects support a new ``__init__()`` method argument, in
     addition to the base :class:`Response` objects. The remaining functionality
     is the same as for the :class:`Response` class and is not documented here.
 
     :param encoding: is a string which contains the encoding to use for this
-       response. If you create a :class:`TextResponse` object with a string as
-       body, it will be converted to bytes encoded using this encoding. If
-       *encoding* is ``None`` (default), the encoding will be looked up in the
-       response headers and body instead.
+       response, as a label of the `Encoding Standard`_, which web browsers
+       implement, or as the name of the Python codec of one of its encodings,
+       e.g. ``cp932`` for Shift_JIS. If you create a :class:`TextResponse`
+       object with a string as body, it will be converted to bytes encoded
+       using this encoding. If *encoding* is ``None`` (default), the encoding
+       will be looked up in the response headers and body instead.
     :type encoding: str
 
     :class:`TextResponse` objects support the following attributes in addition
@@ -855,8 +1468,7 @@ TextResponse objects
 
        Response body, as a string.
 
-       The same as ``response.body.decode(response.encoding)``, but the
-       result is cached after the first call, so you can access
+       The result is cached after the first call, so you can access
        ``response.text`` multiple times without extra overhead.
 
        .. note::
@@ -864,8 +1476,10 @@ TextResponse objects
             ``str(response.body)`` is not a correct way to convert the response
             body into a string:
 
-            >>> str(b'body')
-            "b'body'"
+            .. code-block:: pycon
+
+                >>> str(b"body")
+                "b'body'"
 
 
     .. attribute:: TextResponse.encoding
@@ -873,38 +1487,95 @@ TextResponse objects
        A string with the encoding of this response. The encoding is resolved by
        trying the following mechanisms, in order:
 
-       1. the encoding passed in the ``__init__`` method ``encoding`` argument
+       1. the encoding passed in the ``__init__()`` method ``encoding`` argument
 
-       2. the encoding declared in the Content-Type HTTP header. If this
+       2. the encoding of the `byte order mark`_ at the start of the response
+          body
+
+       3. the encoding declared in the Content-Type HTTP header. If this
           encoding is not valid (i.e. unknown), it is ignored and the next
           resolution mechanism is tried.
 
-       3. the encoding declared in the response body. The TextResponse class
+       4. the encoding declared in the response body. The TextResponse class
           doesn't provide any special functionality for this. However, the
           :class:`HtmlResponse` and :class:`XmlResponse` classes do.
 
-       4. the encoding inferred by looking at the response body. This is the more
+       5. the encoding inferred by looking at the response body. This is the more
           fragile method but also the last one tried.
+
+       This order matches the `encoding sniffing algorithm`_ of the HTML
+       standard, which web browsers follow.
+
+       To resolve the encoding differently, determine it yourself and pass it
+       through :meth:`Response.replace` from a :ref:`downloader middleware
+       <topics-downloader-middleware>`. Give that middleware an order between
+       those of
+       :class:`~scrapy.downloadermiddlewares.redirect.MetaRefreshMiddleware`
+       (580) and
+       :class:`~scrapy.downloadermiddlewares.httpcompression.HttpCompressionMiddleware`
+       (590), so that it gets a decompressed body and no other component reads
+       the response text before it.
+
+       For example, to give a declaration in the response body precedence over
+       the Content-Type header:
+
+       .. code-block:: python
+
+           from w3lib.encoding import html_body_declared_encoding, read_bom
+
+           from scrapy.http import TextResponse
+
+
+           class BodyEncodingMiddleware:
+               def process_response(self, request, response, spider):
+                   if not isinstance(response, TextResponse):
+                       return response
+                   if read_bom(response.body)[0]:
+                       return response
+                   encoding = html_body_declared_encoding(response.body)
+                   return response.replace(encoding=encoding) if encoding else response
 
     .. attribute:: TextResponse.selector
 
-        A :class:`~scrapy.selector.Selector` instance using the response as
+        A :class:`~scrapy.Selector` instance using the response as
         target. The selector is lazily instantiated on first access.
+
+    .. autoattribute:: TextResponse.base_url
+
+    .. autoattribute:: TextResponse.meta_refresh
+
+    .. autoattribute:: TextResponse.attributes
 
     :class:`TextResponse` objects support the following methods in addition to
     the standard :class:`Response` ones:
 
+    .. method:: TextResponse.jmespath(query)
+
+        .. skip: start
+
+        A shortcut to ``TextResponse.selector.jmespath(query)``:
+
+        .. code-block:: python
+
+            response.jmespath("object.[*]")
+
     .. method:: TextResponse.xpath(query)
 
-        A shortcut to ``TextResponse.selector.xpath(query)``::
+        A shortcut to ``TextResponse.selector.xpath(query)``:
 
-            response.xpath('//p')
+        .. code-block:: python
+
+            response.xpath("//p")
 
     .. method:: TextResponse.css(query)
 
-        A shortcut to ``TextResponse.selector.css(query)``::
+        A shortcut to ``TextResponse.selector.css(query)``:
 
-            response.css('p')
+        .. code-block:: python
+
+            response.css("p")
+
+        .. skip: end
 
     .. automethod:: TextResponse.follow
 
@@ -912,8 +1583,17 @@ TextResponse objects
 
     .. automethod:: TextResponse.json()
 
-        Returns a Python object from deserialized JSON document.
-        The result is cached after the first call.
+    .. method:: TextResponse.urljoin(url)
+
+        Constructs an absolute url by combining :attr:`base_url` with a
+        possible relative url.
+
+.. autoclass:: scrapy.http.response.text.MetaRefresh
+    :members:
+
+.. _byte order mark: https://en.wikipedia.org/wiki/Byte_order_mark
+.. _Encoding Standard: https://encoding.spec.whatwg.org/
+.. _encoding sniffing algorithm: https://html.spec.whatwg.org/multipage/parsing.html#determining-the-character-encoding
 
 
 HtmlResponse objects
@@ -937,3 +1617,25 @@ XmlResponse objects
     line.  See :attr:`TextResponse.encoding`.
 
 .. _bug in lxml: https://bugs.launchpad.net/lxml/+bug/1665241
+
+JsonResponse objects
+--------------------
+
+.. class:: JsonResponse(url[, ...])
+
+    The :class:`JsonResponse` class is a subclass of :class:`TextResponse`
+    that is used when the response has a `JSON MIME type
+    <https://mimesniff.spec.whatwg.org/#json-mime-type>`_ in its `Content-Type`
+    header.
+
+BodyFileResponse objects
+------------------------
+
+.. autoclass:: BodyFileResponse
+    :members: body_file
+
+
+Other functions related to responses
+====================================
+
+.. autofunction:: scrapy.utils.response.response_from_dict

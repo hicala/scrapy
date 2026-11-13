@@ -1,97 +1,188 @@
-import unittest
+from __future__ import annotations
+
 import os
-import tempfile
-import shutil
-import contextlib
+import sys
+from pathlib import Path
 
-from pytest import warns
+import pytest
 
-from scrapy.exceptions import ScrapyDeprecationWarning
-from scrapy.utils.project import data_path, get_project_settings
-
-
-@contextlib.contextmanager
-def inside_a_project():
-    prev_dir = os.getcwd()
-    project_dir = tempfile.mkdtemp()
-
-    try:
-        os.chdir(project_dir)
-        with open('scrapy.cfg', 'w') as f:
-            # create an empty scrapy.cfg
-            f.close()
-
-        yield project_dir
-    finally:
-        os.chdir(prev_dir)
-        shutil.rmtree(project_dir)
+from scrapy.exceptions import NotConfigured
+from scrapy.utils.misc import set_environ
+from scrapy.utils.project import (
+    data_path,
+    find_projects,
+    get_project_settings,
+    inside_project,
+    project_data_dir,
+)
 
 
-class ProjectUtilsTest(unittest.TestCase):
-    def test_data_path_outside_project(self):
-        self.assertEqual(
-            os.path.join('.scrapy', 'somepath'),
-            data_path('somepath')
-        )
-        abspath = os.path.join(os.path.sep, 'absolute', 'path')
-        self.assertEqual(abspath, data_path(abspath))
-
-    def test_data_path_inside_project(self):
-        with inside_a_project() as proj_path:
-            expected = os.path.join(proj_path, '.scrapy', 'somepath')
-            self.assertEqual(
-                os.path.realpath(expected),
-                os.path.realpath(data_path('somepath'))
-            )
-            abspath = os.path.join(os.path.sep, 'absolute', 'path')
-            self.assertEqual(abspath, data_path(abspath))
+@pytest.fixture
+def proj_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    project_dir = tmp_path
+    monkeypatch.chdir(project_dir)
+    Path("scrapy.cfg").touch()
+    return project_dir
 
 
-@contextlib.contextmanager
-def set_env(**update):
-    modified = set(update.keys()) & set(os.environ.keys())
-    update_after = {k: os.environ[k] for k in modified}
-    remove_after = frozenset(k for k in update if k not in os.environ)
-    try:
-        os.environ.update(update)
-        yield
-    finally:
-        os.environ.update(update_after)
-        for k in remove_after:
-            os.environ.pop(k)
+@pytest.fixture
+def no_proj_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A working directory without a scrapy.cfg file, also isolated from the
+    user-wide and system-wide Scrapy configuration files."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    return tmp_path
 
 
-class GetProjectSettingsTestCase(unittest.TestCase):
+def test_data_path_outside_project() -> None:
+    assert str(Path(".scrapy", "somepath")) == data_path("somepath")
+    abspath = str(Path(os.path.sep, "absolute", "path"))
+    assert abspath == data_path(abspath)
 
+
+def test_data_path_inside_project(proj_path: Path) -> None:
+    expected = proj_path / ".scrapy" / "somepath"
+    assert expected.resolve() == Path(data_path("somepath")).resolve()
+    abspath = str(Path(os.path.sep, "absolute", "path").resolve())
+    assert abspath == data_path(abspath)
+
+
+def test_data_path_createdir(no_proj_path: Path) -> None:
+    path = Path(data_path("somepath", createdir=True))
+    assert path.is_dir()
+    # An existing directory is left alone.
+    assert Path(data_path("somepath", createdir=True)) == path
+
+
+def test_inside_project_unimportable_settings_module(no_proj_path: Path) -> None:
+    with (
+        set_environ(SCRAPY_SETTINGS_MODULE="tests.no_such_settings_module"),
+        pytest.warns(
+            UserWarning, match="Cannot import scrapy settings module tests.no_such"
+        ),
+    ):
+        assert inside_project() is False
+
+
+def test_project_data_dir_outside_project(no_proj_path: Path) -> None:
+    with pytest.raises(NotConfigured, match="Not inside a project"):
+        project_data_dir()
+
+
+def test_project_data_dir_without_scrapy_cfg(no_proj_path: Path) -> None:
+    with (
+        set_environ(SCRAPY_SETTINGS_MODULE="tests.test_cmdline.settings"),
+        pytest.raises(NotConfigured, match=r"Unable to find scrapy\.cfg file"),
+    ):
+        project_data_dir()
+
+
+def test_project_data_dir_default(proj_path: Path) -> None:
+    expected = (proj_path / ".scrapy").resolve()
+    assert Path(project_data_dir()) == expected
+    assert expected.is_dir()
+    # A second call finds the directory already created.
+    assert Path(project_data_dir()) == expected
+
+
+def test_project_data_dir_from_scrapy_cfg(proj_path: Path) -> None:
+    datadir = proj_path / "custom-datadir"
+    Path("scrapy.cfg").write_text(f"[datadir]\ndefault = {datadir}\n", encoding="utf-8")
+    assert Path(project_data_dir()) == datadir
+    assert datadir.is_dir()
+
+
+class TestGetProjectSettings:
     def test_valid_envvar(self):
-        value = 'tests.test_cmdline.settings'
+        value = "tests.test_cmdline.settings"
         envvars = {
-            'SCRAPY_SETTINGS_MODULE': value,
+            "SCRAPY_SETTINGS_MODULE": value,
         }
-        with set_env(**envvars), warns(None) as warnings:
+        with set_environ(**envvars):
             settings = get_project_settings()
-        assert not warnings
-        assert settings.get('SETTINGS_MODULE') == value
+        assert settings.get("SETTINGS_MODULE") == value
 
     def test_invalid_envvar(self):
         envvars = {
-            'SCRAPY_FOO': 'bar',
+            "SCRAPY_FOO": "bar",
         }
-        with set_env(**envvars), warns(None) as warnings:
-            get_project_settings()
-        assert len(warnings) == 1
-        assert warnings[0].category == ScrapyDeprecationWarning
-        assert str(warnings[0].message).endswith(': FOO')
+        with set_environ(**envvars):
+            settings = get_project_settings()
+
+        assert settings.get("SCRAPY_FOO") is None
+
+    def test_envvar_project_dir_in_sys_path(
+        self, proj_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(sys, "path", sys.path.copy())
+        monkeypatch.setenv("SCRAPY_SETTINGS_MODULE", "tests.test_cmdline.settings")
+        get_project_settings()
+        assert str(proj_path) in sys.path
 
     def test_valid_and_invalid_envvars(self):
-        value = 'tests.test_cmdline.settings'
+        value = "tests.test_cmdline.settings"
         envvars = {
-            'SCRAPY_FOO': 'bar',
-            'SCRAPY_SETTINGS_MODULE': value,
+            "SCRAPY_FOO": "bar",
+            "SCRAPY_SETTINGS_MODULE": value,
         }
-        with set_env(**envvars), warns(None) as warnings:
+        with set_environ(**envvars):
             settings = get_project_settings()
-        assert len(warnings) == 1
-        assert warnings[0].category == ScrapyDeprecationWarning
-        assert str(warnings[0].message).endswith(': FOO')
-        assert settings.get('SETTINGS_MODULE') == value
+        assert settings.get("SETTINGS_MODULE") == value
+        assert settings.get("SCRAPY_FOO") is None
+
+
+def test_find_projects(tmp_path: Path) -> None:
+    for relative_path in (
+        "a/scrapy.cfg",
+        "a/nested/scrapy.cfg",
+        "b/c/d/scrapy.cfg",
+        ".hidden/scrapy.cfg",
+        "no-project/setup.py",
+    ):
+        path = tmp_path / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+
+    assert list(find_projects(tmp_path)) == [
+        tmp_path / "a",
+        tmp_path / "b" / "c" / "d",
+    ]
+
+
+def test_find_projects_skips_virtual_environments(tmp_path: Path) -> None:
+    # An arbitrarily-named directory, to show detection does not rely on it
+    # being called venv or .venv.
+    venv = tmp_path / "my-env"
+    (venv / "lib" / "project").mkdir(parents=True)
+    (venv / "pyvenv.cfg").touch()
+    (venv / "lib" / "project" / "scrapy.cfg").touch()
+
+    assert list(find_projects(tmp_path)) == []
+
+
+def test_find_projects_ignored_dirs(tmp_path: Path) -> None:
+    for relative_path in ("a/scrapy.cfg", "b/scrapy.cfg"):
+        path = tmp_path / relative_path
+        path.parent.mkdir(parents=True)
+        path.touch()
+
+    assert list(find_projects(tmp_path, ignored_dirs=["a"])) == [tmp_path / "b"]
+
+
+def test_find_projects_root(tmp_path: Path) -> None:
+    (tmp_path / "scrapy.cfg").touch()
+    (tmp_path / "a").mkdir()
+    (tmp_path / "a" / "scrapy.cfg").touch()
+
+    assert list(find_projects(tmp_path)) == [tmp_path]
+
+
+def test_find_projects_max_depth(tmp_path: Path) -> None:
+    for relative_path in ("a/scrapy.cfg", "b/c/scrapy.cfg"):
+        path = tmp_path / relative_path
+        path.parent.mkdir(parents=True)
+        path.touch()
+
+    assert list(find_projects(tmp_path, max_depth=0)) == []
+    assert list(find_projects(tmp_path, max_depth=1)) == [tmp_path / "a"]

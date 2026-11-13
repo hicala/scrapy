@@ -1,44 +1,56 @@
-from pytest import mark
-from twisted.internet import defer
-from twisted.trial import unittest
+from __future__ import annotations
 
-from scrapy import signals, Request, Spider
+from typing import TYPE_CHECKING, Any
+
+import pytest
+
+from scrapy import Request, Spider, signals
 from scrapy.utils.test import get_crawler, get_from_asyncio_queue
+from tests.utils.decorators import coroutine_test
 
-from tests.mockserver import MockServer
+if TYPE_CHECKING:
+    from tests.mockserver.http import MockServer
 
 
 class ItemSpider(Spider):
-    name = 'itemspider'
+    name = "itemspider"
+    mockserver: MockServer
 
-    def start_requests(self):
+    async def start(self):
         for index in range(10):
-            yield Request(self.mockserver.url(f'/status?n=200&id={index}'),
-                          meta={'index': index})
+            yield Request(
+                self.mockserver.url(f"/status?n=200&id={index}"), meta={"index": index}
+            )
 
     def parse(self, response):
-        return {'index': response.meta['index']}
+        return {"index": response.meta["index"]}
 
 
-class AsyncSignalTestCase(unittest.TestCase):
-    def setUp(self):
-        self.mockserver = MockServer()
-        self.mockserver.__enter__()
-        self.items = []
+@coroutine_test
+async def test_scheduler_empty() -> None:
+    crawler = get_crawler()
+    calls = []
 
-    def tearDown(self):
-        self.mockserver.__exit__(None, None, None)
+    def track_call() -> None:
+        calls.append(object())
 
-    async def _on_item_scraped(self, item):
+    crawler.signals.connect(track_call, signals.scheduler_empty)
+    await crawler.crawl_async()
+    assert len(calls) >= 1
+
+
+@pytest.mark.only_asyncio
+@coroutine_test
+async def test_simple_pipeline(mockserver: MockServer) -> None:
+    items: list[Any] = []
+
+    async def _on_item_scraped(item: Any) -> None:
         item = await get_from_asyncio_queue(item)
-        self.items.append(item)
+        items.append(item)
 
-    @mark.only_asyncio()
-    @defer.inlineCallbacks
-    def test_simple_pipeline(self):
-        crawler = get_crawler(ItemSpider)
-        crawler.signals.connect(self._on_item_scraped, signals.item_scraped)
-        yield crawler.crawl(mockserver=self.mockserver)
-        self.assertEqual(len(self.items), 10)
-        for index in range(10):
-            self.assertIn({'index': index}, self.items)
+    crawler = get_crawler(ItemSpider)
+    crawler.signals.connect(_on_item_scraped, signals.item_scraped)
+    await crawler.crawl_async(mockserver=mockserver)
+    assert len(items) == 10
+    for index in range(10):
+        assert {"index": index} in items

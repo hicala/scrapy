@@ -1,207 +1,269 @@
-import unittest
-import warnings
+from __future__ import annotations
 
-from scrapy.exceptions import UsageError, ScrapyDeprecationWarning
+from typing import TYPE_CHECKING, Any
+
+import pytest
+
+from scrapy.exceptions import ScrapyDeprecationWarning, UsageError
 from scrapy.settings import BaseSettings, Settings
 from scrapy.utils.conf import (
+    _job_dir,
     arglist_to_dict,
     build_component_list,
+    closest_scrapy_cfg,
     feed_complete_default_values_from_settings,
-    feed_process_params_from_cli
+    feed_process_params_from_cli,
+    get_sources,
 )
 
+if TYPE_CHECKING:
+    from pathlib import Path
 
-class BuildComponentListTest(unittest.TestCase):
 
+class TestBuildComponentList:
     def test_build_dict(self):
-        d = {'one': 1, 'two': None, 'three': 8, 'four': 4}
-        self.assertEqual(build_component_list(d, convert=lambda x: x),
-                         ['one', 'four', 'three'])
-
-    def test_backward_compatible_build_dict(self):
-        base = {'one': 1, 'two': 2, 'three': 3, 'five': 5, 'six': None}
-        custom = {'two': None, 'three': 8, 'four': 4}
-        self.assertEqual(build_component_list(base, custom,
-                                              convert=lambda x: x),
-                         ['one', 'four', 'five', 'three'])
-
-    def test_return_list(self):
-        custom = ['a', 'b', 'c']
-        self.assertEqual(build_component_list(None, custom,
-                                              convert=lambda x: x),
-                         custom)
-
-    def test_map_dict(self):
-        custom = {'one': 1, 'two': 2, 'three': 3}
-        self.assertEqual(build_component_list({}, custom,
-                                              convert=lambda x: x.upper()),
-                         ['ONE', 'TWO', 'THREE'])
-
-    def test_map_list(self):
-        custom = ['a', 'b', 'c']
-        self.assertEqual(build_component_list(None, custom,
-                                              lambda x: x.upper()),
-                         ['A', 'B', 'C'])
-
-    def test_duplicate_components_in_dict(self):
-        duplicate_dict = {'one': 1, 'two': 2, 'ONE': 4}
-        self.assertRaises(ValueError, build_component_list, {}, duplicate_dict,
-                          convert=lambda x: x.lower())
-
-    def test_duplicate_components_in_list(self):
-        duplicate_list = ['a', 'b', 'a']
-        with self.assertRaises(ValueError) as cm:
-            build_component_list(None, duplicate_list, convert=lambda x: x)
-        self.assertIn(str(duplicate_list), str(cm.exception))
+        d = {"one": 1, "two": None, "three": 8, "four": 4}
+        assert build_component_list(d, convert=lambda x: x) == ["one", "four", "three"]
 
     def test_duplicate_components_in_basesettings(self):
         # Higher priority takes precedence
-        duplicate_bs = BaseSettings({'one': 1, 'two': 2}, priority=0)
-        duplicate_bs.set('ONE', 4, priority=10)
-        self.assertEqual(build_component_list(duplicate_bs,
-                                              convert=lambda x: x.lower()),
-                         ['two', 'one'])
-        duplicate_bs.set('one', duplicate_bs['one'], priority=20)
-        self.assertEqual(build_component_list(duplicate_bs,
-                                              convert=lambda x: x.lower()),
-                         ['one', 'two'])
+        duplicate_bs = BaseSettings({"one": 1, "two": 2}, priority=0)
+        duplicate_bs.set("ONE", 4, priority=10)
+        assert build_component_list(duplicate_bs, convert=lambda x: x.lower()) == [
+            "two",
+            "one",
+        ]
+        duplicate_bs.set("one", duplicate_bs["one"], priority=20)
+        assert build_component_list(duplicate_bs, convert=lambda x: x.lower()) == [
+            "one",
+            "two",
+        ]
         # Same priority raises ValueError
-        duplicate_bs.set('ONE', duplicate_bs['ONE'], priority=20)
-        self.assertRaises(ValueError, build_component_list, duplicate_bs,
-                          convert=lambda x: x.lower())
+        duplicate_bs.set("ONE", duplicate_bs["ONE"], priority=20)
+        with pytest.raises(
+            ValueError, match=r"Some paths in .* convert to the same object"
+        ):
+            build_component_list(duplicate_bs, convert=lambda x: x.lower())
+
+    def test_duplicate_components_in_dict(self):
+        d = {"one": 1, "ONE": 2}
+        with pytest.raises(
+            ValueError, match=r"Some paths in .* convert to the same object"
+        ):
+            build_component_list(d, convert=lambda x: x.lower())
+
+    def test_invalid_value(self):
+        d = {"one": "1"}
+        with pytest.raises(
+            ValueError, match=r"Invalid value 1 for component one, please provide"
+        ):
+            build_component_list(d, convert=lambda x: x)
 
     def test_valid_numbers(self):
         # work well with None and numeric values
-        d = {'a': 10, 'b': None, 'c': 15, 'd': 5.0}
-        self.assertEqual(build_component_list(d, convert=lambda x: x),
-                         ['d', 'a', 'c'])
-        d = {'a': 33333333333333333333, 'b': 11111111111111111111, 'c': 22222222222222222222}
-        self.assertEqual(build_component_list(d, convert=lambda x: x),
-                         ['b', 'c', 'a'])
-        # raise exception for invalid values
-        d = {'one': '5'}
-        self.assertRaises(ValueError, build_component_list, {}, d, convert=lambda x: x)
-        d = {'one': '1.0'}
-        self.assertRaises(ValueError, build_component_list, {}, d, convert=lambda x: x)
-        d = {'one': [1, 2, 3]}
-        self.assertRaises(ValueError, build_component_list, {}, d, convert=lambda x: x)
-        d = {'one': {'a': 'a', 'b': 2}}
-        self.assertRaises(ValueError, build_component_list, {}, d, convert=lambda x: x)
-        d = {'one': 'lorem ipsum'}
-        self.assertRaises(ValueError, build_component_list, {}, d, convert=lambda x: x)
+        d = {"a": 10, "b": None, "c": 15, "d": 5.0}
+        assert build_component_list(d, convert=lambda x: x) == ["d", "a", "c"]
+        d = {
+            "a": 33333333333333333333,
+            "b": 11111111111111111111,
+            "c": 22222222222222222222,
+        }
+        assert build_component_list(d, convert=lambda x: x) == ["b", "c", "a"]
 
 
-class UtilsConfTestCase(unittest.TestCase):
-
-    def test_arglist_to_dict(self):
-        self.assertEqual(
-            arglist_to_dict(['arg1=val1', 'arg2=val2']),
-            {'arg1': 'val1', 'arg2': 'val2'})
+def test_get_sources():
+    assert get_sources() == [*get_sources(use_closest=False), closest_scrapy_cfg()]
 
 
-class FeedExportConfigTestCase(unittest.TestCase):
+def test_arglist_to_dict():
+    assert arglist_to_dict(["arg1=val1", "arg2=val2"]) == {
+        "arg1": "val1",
+        "arg2": "val2",
+    }
 
+
+class TestFeedExportConfig:
     def test_feed_export_config_invalid_format(self):
         settings = Settings()
-        self.assertRaises(UsageError, feed_process_params_from_cli, settings, ['items.dat'], 'noformat')
+        with pytest.raises(UsageError):
+            feed_process_params_from_cli(settings, ["items.dat"])
 
     def test_feed_export_config_mismatch(self):
         settings = Settings()
-        self.assertRaises(
-            UsageError,
-            feed_process_params_from_cli, settings, ['items1.dat', 'items2.dat'], 'noformat'
-        )
-
-    def test_feed_export_config_backward_compatible(self):
-        with warnings.catch_warnings(record=True) as cw:
-            settings = Settings()
-            self.assertEqual(
-                {'items.dat': {'format': 'csv'}},
-                feed_process_params_from_cli(settings, ['items.dat'], 'csv')
-            )
-            self.assertEqual(cw[0].category, ScrapyDeprecationWarning)
+        with pytest.raises(UsageError):
+            feed_process_params_from_cli(settings, ["items1.dat", "items2.dat"])
 
     def test_feed_export_config_explicit_formats(self):
         settings = Settings()
-        self.assertEqual(
-            {'items_1.dat': {'format': 'json'}, 'items_2.dat': {'format': 'xml'}, 'items_3.dat': {'format': 'csv'}},
-            feed_process_params_from_cli(settings, ['items_1.dat:json', 'items_2.dat:xml', 'items_3.dat:csv'])
+        assert {
+            "items_1.dat": {"format": "json"},
+            "items_2.dat": {"format": "xml"},
+            "items_3.dat": {"format": "csv"},
+        } == feed_process_params_from_cli(
+            settings, ["items_1.dat:json", "items_2.dat:xml", "items_3.dat:csv"]
         )
 
     def test_feed_export_config_implicit_formats(self):
         settings = Settings()
-        self.assertEqual(
-            {'items_1.json': {'format': 'json'}, 'items_2.xml': {'format': 'xml'}, 'items_3.csv': {'format': 'csv'}},
-            feed_process_params_from_cli(settings, ['items_1.json', 'items_2.xml', 'items_3.csv'])
+        assert {
+            "items_1.json": {"format": "json"},
+            "items_2.xml": {"format": "xml"},
+            "items_3.csv": {"format": "csv"},
+        } == feed_process_params_from_cli(
+            settings, ["items_1.json", "items_2.xml", "items_3.csv"]
         )
 
     def test_feed_export_config_stdout(self):
         settings = Settings()
-        self.assertEqual(
-            {'stdout:': {'format': 'pickle'}},
-            feed_process_params_from_cli(settings, ['-:pickle'])
+        assert {"stdout:": {"format": "pickle"}} == feed_process_params_from_cli(
+            settings, ["-:pickle"]
         )
 
     def test_feed_export_config_overwrite(self):
         settings = Settings()
-        self.assertEqual(
-            {'output.json': {'format': 'json', 'overwrite': True}},
-            feed_process_params_from_cli(settings, [], None, ['output.json'])
+        assert {
+            "output.json": {"format": "json", "mode": "overwrite"}
+        } == feed_process_params_from_cli(
+            settings, [], overwrite_output=["output.json"]
         )
 
+    def test_feed_complete_default_values_mode_from_settings(self):
+        settings = Settings({"FEED_MODE": "create"})
+        new_feed = feed_complete_default_values_from_settings({}, settings)
+        assert new_feed["mode"] == "create"
+        assert "overwrite" not in new_feed
+
+    @pytest.mark.parametrize(
+        ("mode", "overwrite"),
+        [
+            ("append", False),
+            ("overwrite", True),
+        ],
+    )
+    def test_feed_complete_default_values_mode_sets_overwrite(self, mode, overwrite):
+        """The deprecated overwrite feed option is kept in sync for the sake of
+        feed storages that predate the mode feed option."""
+        settings = Settings({"FEED_MODE": mode})
+        new_feed = feed_complete_default_values_from_settings({}, settings)
+        assert new_feed["mode"] == mode
+        assert new_feed["overwrite"] is overwrite
+
+    @pytest.mark.parametrize(
+        ("overwrite", "mode"),
+        [
+            (True, "overwrite"),
+            (False, "append"),
+        ],
+    )
+    def test_feed_complete_default_values_overwrite_deprecated(self, overwrite, mode):
+        settings = Settings()
+        with pytest.warns(
+            ScrapyDeprecationWarning, match="overwrite feed option is deprecated"
+        ):
+            new_feed = feed_complete_default_values_from_settings(
+                {"overwrite": overwrite}, settings
+            )
+        assert new_feed["mode"] == mode
+        assert new_feed["overwrite"] is overwrite
+
+    def test_feed_complete_default_values_overwrite_and_mode(self):
+        settings = Settings()
+        with (
+            pytest.raises(ValueError, match="mutually exclusive"),
+            pytest.warns(ScrapyDeprecationWarning),
+        ):
+            feed_complete_default_values_from_settings(
+                {"overwrite": True, "mode": "create"}, settings
+            )
+
     def test_output_and_overwrite_output(self):
-        with self.assertRaises(UsageError):
+        with pytest.raises(UsageError):
             feed_process_params_from_cli(
-                Settings(),
-                ['output1.json'],
-                None,
-                ['output2.json'],
+                Settings(), ["output1.json"], overwrite_output=["output2.json"]
             )
 
     def test_feed_complete_default_values_from_settings_empty(self):
-        feed = {}
-        settings = Settings({
-            "FEED_EXPORT_ENCODING": "custom encoding",
-            "FEED_EXPORT_FIELDS": ["f1", "f2", "f3"],
-            "FEED_EXPORT_INDENT": 42,
-            "FEED_STORE_EMPTY": True,
-            "FEED_URI_PARAMS": (1, 2, 3, 4),
-            "FEED_EXPORT_BATCH_ITEM_COUNT": 2,
-        })
+        feed: dict[str, Any] = {}
+        settings = Settings(
+            {
+                "FEED_EXPORT_ENCODING": "custom encoding",
+                "FEED_EXPORT_FIELDS": ["f1", "f2", "f3"],
+                "FEED_EXPORT_INDENT": 42,
+                "FEED_STORE_EMPTY": True,
+                "FEED_URI_PARAMS": (1, 2, 3, 4),
+                "FEED_EXPORT_BATCH_ITEM_COUNT": 2,
+            }
+        )
         new_feed = feed_complete_default_values_from_settings(feed, settings)
-        self.assertEqual(new_feed, {
+        assert new_feed == {
+            "mode": None,
             "encoding": "custom encoding",
             "fields": ["f1", "f2", "f3"],
             "indent": 42,
             "store_empty": True,
             "uri_params": (1, 2, 3, 4),
             "batch_item_count": 2,
-            "item_export_kwargs": dict(),
-        })
+            "item_export_kwargs": {},
+        }
 
     def test_feed_complete_default_values_from_settings_non_empty(self):
         feed = {
             "encoding": "other encoding",
             "fields": None,
         }
-        settings = Settings({
-            "FEED_EXPORT_ENCODING": "custom encoding",
-            "FEED_EXPORT_FIELDS": ["f1", "f2", "f3"],
-            "FEED_EXPORT_INDENT": 42,
-            "FEED_STORE_EMPTY": True,
-            "FEED_EXPORT_BATCH_ITEM_COUNT": 2,
-        })
+        settings = Settings(
+            {
+                "FEED_EXPORT_ENCODING": "custom encoding",
+                "FEED_EXPORT_FIELDS": ["f1", "f2", "f3"],
+                "FEED_EXPORT_INDENT": 42,
+                "FEED_STORE_EMPTY": True,
+                "FEED_EXPORT_BATCH_ITEM_COUNT": 2,
+            }
+        )
         new_feed = feed_complete_default_values_from_settings(feed, settings)
-        self.assertEqual(new_feed, {
+        assert new_feed == {
+            "mode": None,
             "encoding": "other encoding",
             "fields": None,
             "indent": 42,
             "store_empty": True,
             "uri_params": None,
             "batch_item_count": 2,
-            "item_export_kwargs": dict(),
-        })
+            "item_export_kwargs": {},
+        }
+
+    def test_feed_complete_default_values_from_settings_format_from_uri(self):
+        feed: dict[str, Any] = {}
+        new_feed = feed_complete_default_values_from_settings(
+            feed, Settings(), "output.json"
+        )
+        assert new_feed["format"] == "json"
+
+    def test_feed_complete_default_values_from_settings_format_kept(self):
+        feed = {"format": "csv"}
+        new_feed = feed_complete_default_values_from_settings(
+            feed, Settings(), "output.json"
+        )
+        assert new_feed["format"] == "csv"
+
+    def test_feed_complete_default_values_from_settings_format_not_inferable(self):
+        feed: dict[str, Any] = {}
+        new_feed = feed_complete_default_values_from_settings(
+            feed, Settings(), "stdout:"
+        )
+        assert new_feed["format"] == ""
 
 
-if __name__ == "__main__":
-    unittest.main()
+def test_no_jobdir() -> None:
+    assert _job_dir(Settings()) is None
+    assert _job_dir(Settings({"JOBDIR": ""})) is None
+
+
+def test_existing_jobdir(tmp_path: Path) -> None:
+    assert _job_dir(Settings({"JOBDIR": str(tmp_path)})) == str(tmp_path)
+
+
+def test_missing_jobdir(tmp_path: Path) -> None:
+    jobdir = tmp_path / "missing" / "jobdir"
+    assert _job_dir(Settings({"JOBDIR": str(jobdir)})) == str(jobdir)
+    assert jobdir.is_dir()
